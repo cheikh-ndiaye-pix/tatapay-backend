@@ -7,8 +7,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const PAYTECH_API_KEY    = process.env.PAYTECH_API_KEY;
-const PAYTECH_API_SECRET = process.env.PAYTECH_API_SECRET;
+const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY || '').trim();
+const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
