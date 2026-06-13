@@ -35,8 +35,8 @@ app.post('/api/payment/init', async (req, res) => {
     command_name: 'TataPay Paiement',
     env: 'prod',
     ipn_url:     'https://tatapay-backend-1.onrender.com/api/ipn',
-    success_url: 'https://tatapay-a4972.web.app',
-    cancel_url:  'https://tatapay-a4972.web.app',
+    success_url: 'https://tatapay-a4972.web.app/success.html',
+    cancel_url:  'https://tatapay-a4972.web.app/cancel.html',
     sender_phone:   phone,
     sender_country: 'SN',
     channel: method === 'wave' ? 'wave' : 'orange_money',
@@ -55,7 +55,16 @@ app.post('/api/payment/init', async (req, res) => {
       body: JSON.stringify(payload)
     });
 
-    const data = await response.json();
+    const rawText = await response.text();
+    console.log('🔍 Statut PayTech:', response.status);
+    console.log('🔍 Réponse brute PayTech:', rawText);
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      return res.status(502).json({ error: 'Réponse non-JSON de PayTech', raw: rawText.slice(0, 1000) });
+    }
 
     if (data.payment_url) {
       res.json({ payment_url: data.payment_url, ref_command: refCommand });
