@@ -33,7 +33,7 @@ app.post('/api/payment/init', async (req, res) => {
     currency: 'XOF',
     ref_command: refCommand,
     command_name: 'TataPay Paiement',
-    env: 'test',
+    env: 'prod',
     ipn_url:     'https://tatapay-backend-1.onrender.com/api/ipn',
     success_url: 'https://tatapay-a4972.web.app/success.html',
     cancel_url:  'https://tatapay-a4972.web.app/cancel.html',
