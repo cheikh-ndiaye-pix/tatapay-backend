@@ -45,7 +45,7 @@ app.post('/api/payment/init', async (req, res) => {
 
   try {
     const fetch = await import('node-fetch');
-    const response = await fetch.default('https://paytech.sn/api/payment/request', {
+    const response = await fetch.default('https://paytech.sn/api/payment/request-payment', {
       method: 'POST',
       headers: {
         'API_KEY':    PAYTECH_API_KEY,
