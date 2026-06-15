@@ -28,8 +28,8 @@ app.get('/', (req, res) => {
 app.post('/api/payment/init', async (req, res) => {
   const { amount, phone, method, type, uid, meta } = req.body;
 
-  if (!amount || amount < 100) {
-    return res.status(400).json({ error: 'Montant minimum 100 FCFA' });
+  if (!amount || amount < 50) {
+    return res.status(400).json({ error: 'Montant minimum 50 FCFA' });
   }
   if (!uid) {
     return res.status(400).json({ error: 'UID utilisateur manquant' });
