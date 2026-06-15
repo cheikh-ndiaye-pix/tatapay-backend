@@ -11,6 +11,8 @@ app.use(express.urlencoded({ extended: true }));
 // ── VARIABLES D'ENVIRONNEMENT ──
 const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY    || '').trim();
 const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
+// 'test' tant que le compte PayTech n'est pas activé en production, puis passer à 'prod'
+const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
 
 // ── FIREBASE ──
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -19,7 +21,7 @@ const db = admin.firestore();
 
 // ── ROUTE TEST ──
 app.get('/', (req, res) => {
-  res.json({ message: 'TataPay Backend is running!' });
+  res.json({ message: 'TataPay Backend is running!', paytech_env: PAYTECH_ENV });
 });
 
 // ── INIT PAIEMENT PAYTECH ──
@@ -58,7 +60,7 @@ app.post('/api/payment/init', async (req, res) => {
     currency:     'XOF',
     ref_command:  refCommand,
     command_name: 'TataPay Paiement',
-    env:          'prod',
+    env:          PAYTECH_ENV,
     ipn_url:      'https://tatapay-backend-1.onrender.com/api/ipn',
     success_url:  'https://tatapay-a4972.web.app/success.html',
     cancel_url:   'https://tatapay-a4972.web.app/cancel.html',
@@ -81,7 +83,7 @@ app.post('/api/payment/init', async (req, res) => {
     });
 
     const rawText = await response.text();
-    console.log('🔍 Statut PayTech:', response.status);
+    console.log('🔍 Statut PayTech:', response.status, '| env:', PAYTECH_ENV);
     console.log('🔍 Réponse PayTech:', rawText.slice(0, 500));
 
     let data;
@@ -249,5 +251,5 @@ app.post('/api/ipn', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Serveur TataPay démarré sur le port ${PORT}`);
+  console.log(`✅ Serveur TataPay démarré sur le port ${PORT} | PAYTECH_ENV=${PAYTECH_ENV}`);
 });
