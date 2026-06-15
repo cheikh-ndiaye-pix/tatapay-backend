@@ -93,8 +93,9 @@ app.post('/api/payment/init', async (req, res) => {
       return res.status(502).json({ error: 'Réponse non-JSON de PayTech', raw: rawText.slice(0, 500) });
     }
 
-    if (data.payment_url) {
-      res.json({ payment_url: data.payment_url, ref_command: refCommand });
+    if (data.payment_url || data.redirect_url) {
+      const url = data.payment_url || data.redirect_url;
+      res.json({ payment_url: url, redirect_url: url, ref_command: refCommand });
     } else {
       await db.collection('paytech_transactions').doc(refCommand).delete();
       res.status(500).json({ error: data.message || 'Erreur PayTech', details: data });
