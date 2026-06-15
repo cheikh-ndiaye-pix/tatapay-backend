@@ -24,7 +24,7 @@ app.get('/', (req, res) => {
 
 // ── INIT PAIEMENT PAYTECH ──
 app.post('/api/payment/init', async (req, res) => {
-  const { amount, phone, method, type, uid } = req.body;
+  const { amount, phone, method, type, uid, meta } = req.body;
 
   if (!amount || amount < 100) {
     return res.status(400).json({ error: 'Montant minimum 100 FCFA' });
@@ -35,18 +35,25 @@ app.post('/api/payment/init', async (req, res) => {
 
   const refCommand = 'TTP-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
-  // Sauvegarder le montant attendu côté serveur (anti-falsification)
+  // Sauvegarder côté serveur (anti-falsification)
   await db.collection('paytech_transactions').doc(refCommand).set({
     uid,
     amount,
-    type,
-    method,
-    status: 'pending',
+    type:      type || 'recharge',
+    method:    method || 'wave',
+    meta:      meta || null,   // ← infos ticket (busUid, from, to, etc.)
+    status:    'pending',
     createdAt: admin.firestore.FieldValue.serverTimestamp()
   });
 
+  const itemNames = {
+    recharge: 'Recharge TataPay',
+    ticket:   'Ticket TataPay',
+    retrait:  'Retrait TataPay'
+  };
+
   const payload = {
-    item_name:    type === 'recharge' ? 'Recharge TataPay' : 'Ticket TataPay',
+    item_name:    itemNames[type] || 'TataPay',
     item_price:   amount,
     currency:     'XOF',
     ref_command:  refCommand,
@@ -66,9 +73,9 @@ app.post('/api/payment/init', async (req, res) => {
     const response = await fetch.default('https://paytech.sn/api/payment/request-payment', {
       method: 'POST',
       headers: {
-        'API_KEY':       PAYTECH_API_KEY,
-        'API_SECRET':    PAYTECH_API_SECRET,
-        'Content-Type':  'application/json'
+        'API_KEY':      PAYTECH_API_KEY,
+        'API_SECRET':   PAYTECH_API_SECRET,
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     });
@@ -87,7 +94,6 @@ app.post('/api/payment/init', async (req, res) => {
     if (data.payment_url) {
       res.json({ payment_url: data.payment_url, ref_command: refCommand });
     } else {
-      // Supprimer la transaction en attente si PayTech refuse
       await db.collection('paytech_transactions').doc(refCommand).delete();
       res.status(500).json({ error: data.message || 'Erreur PayTech', details: data });
     }
@@ -101,17 +107,14 @@ app.post('/api/payment/init', async (req, res) => {
 // ── IPN PAYTECH (sécurisé) ──
 app.post('/api/ipn', async (req, res) => {
   console.log('📩 IPN reçu:', JSON.stringify({
-    type_event:   req.body.type_event,
-    ref_command:  req.body.ref_command,
-    item_price:   req.body.item_price
-    // Ne pas logger sender_phone (PII)
+    type_event:  req.body.type_event,
+    ref_command: req.body.ref_command,
+    item_price:  req.body.item_price
   }));
 
   try {
     const {
       type_event,
-      custom_field,
-      item_price,
       ref_command,
       method,
       api_key_sha256,
@@ -127,13 +130,12 @@ app.post('/api/ipn', async (req, res) => {
       return res.status(403).send('Forbidden');
     }
 
-    // Ignorer les événements autres que sale_complete
     if (type_event !== 'sale_complete') {
       console.log('⏭️ Événement ignoré:', type_event);
       return res.status(200).send('OK');
     }
 
-    // ✅ ANTI-DOUBLE CRÉDIT (via Firestore transaction atomique)
+    // ✅ ANTI-DOUBLE CRÉDIT (transaction atomique)
     const txRef = db.collection('paytech_transactions').doc(ref_command);
 
     await db.runTransaction(async (t) => {
@@ -141,49 +143,100 @@ app.post('/api/ipn', async (req, res) => {
 
       if (!txSnap.exists) {
         console.error('❌ Transaction inconnue:', ref_command);
-        return; // Ne pas créditer une transaction non initiée par nous
+        return;
       }
-
       if (txSnap.data().status === 'credited') {
         console.log('⚠️ Déjà crédité:', ref_command);
         return;
       }
 
-      const txData  = txSnap.data();
-      const uid     = txData.uid;
-      // ✅ Utiliser le montant stocké côté serveur (pas celui de custom_field)
-      const amount  = txData.amount;
+      const txData = txSnap.data();
+      const { uid, amount, type, meta } = txData;
 
       if (!uid || !amount) {
-        console.error('❌ uid ou amount manquant dans la transaction');
+        console.error('❌ uid ou amount manquant');
         return;
       }
 
-      const userRef = db.collection('users').doc(uid);
+      const userRef  = db.collection('users').doc(uid);
+      const histRef  = db.collection('users').doc(uid).collection('history').doc();
+      const finalMethod = method || txData.method || 'Mobile Money';
 
-      // Créditer le wallet
-      t.update(userRef, {
-        balance: admin.firestore.FieldValue.increment(amount)
-      });
+      // ── CAS 1 : RECHARGE PASSAGER ──
+      if (type === 'recharge') {
+        t.update(userRef, {
+          balance: admin.firestore.FieldValue.increment(amount)
+        });
+        t.set(histRef, {
+          type:   'recharge',
+          label:  `Recharge via ${finalMethod} — ${ref_command}`,
+          amount,
+          ref:    ref_command,
+          ts:     admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`✅ Recharge : ${uid} +${amount} FCFA`);
+      }
 
-      // Historique
-      const histRef = db.collection('users').doc(uid).collection('history').doc();
-      t.set(histRef, {
-        type:   'recharge',
-        label:  `Recharge via ${method || txData.method || 'Mobile Money'} — ${ref_command}`,
-        amount: amount,
-        ref:    ref_command,
-        ts:     admin.firestore.FieldValue.serverTimestamp()
-      });
+      // ── CAS 2 : TICKET ──
+      else if (type === 'ticket' && meta) {
+        // Créer la demande pending pour le receveur
+        const pendingRef = db.collection('pending').doc();
+        t.set(pendingRef, {
+          busUid:        meta.busUid,
+          busId:         meta.busId,
+          passengerUid:  uid,
+          passengerId:   meta.passengerId,
+          passengerName: meta.passengerName,
+          from:          meta.from,
+          to:            meta.to,
+          section:       meta.section,
+          price:         amount,
+          method:        finalMethod,
+          gie:           meta.gie,
+          vehicle:       meta.vehicle,
+          ligne:         meta.ligne,
+          zone:          meta.zone,
+          ref:           ref_command,
+          paidAt:        admin.firestore.FieldValue.serverTimestamp(),
+          status:        'pending'
+        });
+        // Débiter le passager
+        t.update(userRef, {
+          balance: admin.firestore.FieldValue.increment(-amount)
+        });
+        t.set(histRef, {
+          type:   'ticket',
+          label:  `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to}`,
+          amount: -amount,
+          ref:    ref_command,
+          ts:     admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`✅ Ticket créé : ${uid} -${amount} FCFA → pending receveur ${meta.busUid}`);
+      }
+
+      // ── CAS 3 : RETRAIT RECEVEUR ──
+      else if (type === 'retrait') {
+        // Le virement mobile est géré par PayTech
+        // On débite juste le wallet (déjà vérifié côté front avant init)
+        t.update(userRef, {
+          balance: admin.firestore.FieldValue.increment(-amount)
+        });
+        t.set(histRef, {
+          type:   'withdraw',
+          label:  `Retrait via ${finalMethod} — ${ref_command}`,
+          amount: -amount,
+          ref:    ref_command,
+          ts:     admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`✅ Retrait : ${uid} -${amount} FCFA`);
+      }
 
       // Marquer comme crédité
       t.update(txRef, {
         status:     'credited',
-        method:     method || txData.method,
+        method:     finalMethod,
         creditedAt: admin.firestore.FieldValue.serverTimestamp()
       });
-
-      console.log(`✅ Wallet crédité : ${uid} +${amount} FCFA via ${method}`);
     });
 
     res.status(200).send('OK');
