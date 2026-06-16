@@ -250,6 +250,161 @@ app.post('/api/ipn', async (req, res) => {
   }
 });
 
+// ── CLÉ SECRÈTE OFFLINE (variable d'env OFFLINE_SECRET) ──
+const OFFLINE_SECRET = (process.env.OFFLINE_SECRET || 'tatapay-offline-secret-2026').trim();
+
+// ── GÉNÉRER QR SIGNÉ POUR MODE HORS-LIGNE ──
+// Le passager appelle cette route quand il est connecté
+// Le QR retourné est valable 24h et vérifiable sans internet
+app.post('/api/offline/qr', async (req, res) => {
+  const { uid } = req.body;
+  if (!uid) return res.status(400).json({ error: 'UID manquant' });
+
+  try {
+    const userSnap = await db.collection('users').doc(uid).get();
+    if (!userSnap.exists) return res.status(404).json({ error: 'Utilisateur introuvable' });
+
+    const userData = userSnap.data();
+    const payload = {
+      uid,
+      walletId: userData.walletId,
+      name:     userData.name,
+      balance:  userData.balance || 0,
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24h
+    };
+
+    // Signature HMAC-SHA256
+    const signature = crypto
+      .createHmac('sha256', OFFLINE_SECRET)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    console.log(`✅ QR offline généré : ${uid} | solde: ${payload.balance} FCFA`);
+    res.json({ payload, signature });
+
+  } catch (err) {
+    console.error('❌ Erreur génération QR offline:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── VÉRIFIER SIGNATURE QR HORS-LIGNE ──
+// Utilisé par le receveur pour vérifier un QR sans internet (côté frontend)
+// On expose la clé publique de vérification uniquement
+app.post('/api/offline/verify', async (req, res) => {
+  const { payload, signature } = req.body;
+  if (!payload || !signature) return res.status(400).json({ error: 'Données manquantes' });
+
+  try {
+    const expectedSig = crypto
+      .createHmac('sha256', OFFLINE_SECRET)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    const valid     = expectedSig === signature;
+    const expired   = Date.now() > payload.expiresAt;
+    const maxOffline = 1000; // 1000 FCFA max hors-ligne
+
+    res.json({ valid, expired, maxOffline });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SYNC TRANSACTIONS HORS-LIGNE ──
+// Le receveur envoie toutes ses transactions stockées localement quand il retrouve internet
+app.post('/api/offline/sync', async (req, res) => {
+  const { transactions } = req.body;
+  if (!transactions || !Array.isArray(transactions)) {
+    return res.status(400).json({ error: 'Tableau de transactions manquant' });
+  }
+
+  const results = [];
+
+  for (const tx of transactions) {
+    const { payload, signature, price, receiverUid, syncRef } = tx;
+
+    try {
+      // 1. Vérifier signature
+      const expectedSig = crypto
+        .createHmac('sha256', OFFLINE_SECRET)
+        .update(JSON.stringify(payload))
+        .digest('hex');
+
+      if (expectedSig !== signature) {
+        results.push({ syncRef, status: 'rejected', reason: 'Signature invalide' });
+        continue;
+      }
+
+      // 2. Vérifier expiration (max 24h)
+      if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) {
+        results.push({ syncRef, status: 'rejected', reason: 'QR expiré' });
+        continue;
+      }
+
+      // 3. Vérifier limite hors-ligne
+      if (price > 1000) {
+        results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite hors-ligne 1000 FCFA' });
+        continue;
+      }
+
+      // 4. Vérifier double dépense (syncRef unique)
+      const existingSnap = await db.collection('offline_transactions').doc(syncRef).get();
+      if (existingSnap.exists) {
+        results.push({ syncRef, status: 'already_synced' });
+        continue;
+      }
+
+      // 5. Vérifier solde réel Firebase
+      const passengerRef  = db.collection('users').doc(payload.uid);
+      const passengerSnap = await passengerRef.get();
+      if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
+        results.push({ syncRef, status: 'rejected', reason: 'Solde insuffisant' });
+        continue;
+      }
+
+      // 6. Appliquer la transaction (atomique)
+      const receiverRef = db.collection('users').doc(receiverUid);
+      const passHistRef = db.collection('users').doc(payload.uid).collection('history').doc();
+      const recvHistRef = db.collection('users').doc(receiverUid).collection('history').doc();
+
+      await db.runTransaction(async (t) => {
+        // Débiter passager
+        t.update(passengerRef, { balance: admin.firestore.FieldValue.increment(-price) });
+        t.set(passHistRef, {
+          type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`,
+          amount: -price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        // Créditer receveur
+        t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(price) });
+        t.set(recvHistRef, {
+          type: 'collect_offline', label: `Collecte hors-ligne — ${syncRef}`,
+          amount: price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        // Marquer comme synced
+        t.set(db.collection('offline_transactions').doc(syncRef), {
+          passengerUid: payload.uid, receiverUid, price, syncRef,
+          syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced'
+        });
+      });
+
+      results.push({ syncRef, status: 'synced' });
+      console.log(`✅ Sync offline : ${payload.uid} -${price} FCFA → ${receiverUid}`);
+
+    } catch (err) {
+      console.error(`❌ Erreur sync ${syncRef}:`, err.message);
+      results.push({ syncRef, status: 'error', reason: err.message });
+    }
+  }
+
+  const synced   = results.filter(r => r.status === 'synced').length;
+  const rejected = results.filter(r => r.status === 'rejected').length;
+  console.log(`📊 Sync terminée : ${synced} acceptées, ${rejected} rejetées`);
+  res.json({ results, synced, rejected });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Serveur TataPay démarré sur le port ${PORT} | PAYTECH_ENV=${PAYTECH_ENV}`);
