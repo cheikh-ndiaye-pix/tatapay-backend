@@ -2,6 +2,7 @@ const express = require('express');
 const cors    = require('cors');
 const admin   = require('firebase-admin');
 const crypto  = require('crypto');
+const https   = require('https');
 const app     = express();
 
 app.use(cors());
@@ -11,7 +12,6 @@ app.use(express.urlencoded({ extended: true }));
 // ── VARIABLES D'ENVIRONNEMENT ──
 const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY    || '').trim();
 const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
-// 'test' tant que le compte PayTech n'est pas activé en production, puis passer à 'prod'
 const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
 
 // ── FIREBASE ──
@@ -23,6 +23,9 @@ const db = admin.firestore();
 app.get('/', (req, res) => {
   res.json({ message: 'TataPay Backend is running!', paytech_env: PAYTECH_ENV });
 });
+
+// ── KEEP-ALIVE PING (empêche Render de s'endormir) ──
+app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date() }));
 
 // ── INIT PAIEMENT PAYTECH ──
 app.post('/api/payment/init', async (req, res) => {
@@ -37,13 +40,12 @@ app.post('/api/payment/init', async (req, res) => {
 
   const refCommand = 'TTP-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
-  // Sauvegarder côté serveur (anti-falsification)
   await db.collection('paytech_transactions').doc(refCommand).set({
     uid,
     amount,
     type:      type || 'recharge',
     method:    method || 'wave',
-    meta:      meta || null,   // ← infos ticket (busUid, from, to, etc.)
+    meta:      meta || null,
     status:    'pending',
     createdAt: admin.firestore.FieldValue.serverTimestamp()
   });
@@ -124,7 +126,6 @@ app.post('/api/ipn', async (req, res) => {
       api_secret_sha256
     } = req.body;
 
-    // ✅ VÉRIFICATION SIGNATURE PAYTECH
     const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
     const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
 
@@ -138,7 +139,6 @@ app.post('/api/ipn', async (req, res) => {
       return res.status(200).send('OK');
     }
 
-    // ✅ ANTI-DOUBLE CRÉDIT (transaction atomique)
     const txRef = db.collection('paytech_transactions').doc(ref_command);
 
     await db.runTransaction(async (t) => {
@@ -182,7 +182,6 @@ app.post('/api/ipn', async (req, res) => {
 
       // ── CAS 2 : TICKET ──
       else if (type === 'ticket' && meta) {
-        // Créer la demande pending pour le receveur
         const pendingRef = db.collection('pending').doc();
         t.set(pendingRef, {
           busUid:        meta.busUid,
@@ -203,7 +202,6 @@ app.post('/api/ipn', async (req, res) => {
           paidAt:        admin.firestore.FieldValue.serverTimestamp(),
           status:        'pending'
         });
-        // Débiter le passager
         t.update(userRef, {
           balance: admin.firestore.FieldValue.increment(-amount)
         });
@@ -219,8 +217,6 @@ app.post('/api/ipn', async (req, res) => {
 
       // ── CAS 3 : RETRAIT RECEVEUR ──
       else if (type === 'retrait') {
-        // Le virement mobile est géré par PayTech
-        // On débite juste le wallet (déjà vérifié côté front avant init)
         t.update(userRef, {
           balance: admin.firestore.FieldValue.increment(-amount)
         });
@@ -234,7 +230,6 @@ app.post('/api/ipn', async (req, res) => {
         console.log(`✅ Retrait : ${uid} -${amount} FCFA`);
       }
 
-      // Marquer comme crédité
       t.update(txRef, {
         status:     'credited',
         method:     finalMethod,
@@ -250,12 +245,10 @@ app.post('/api/ipn', async (req, res) => {
   }
 });
 
-// ── CLÉ SECRÈTE OFFLINE (variable d'env OFFLINE_SECRET) ──
+// ── CLÉ SECRÈTE OFFLINE ──
 const OFFLINE_SECRET = (process.env.OFFLINE_SECRET || 'tatapay-offline-secret-2026').trim();
 
 // ── GÉNÉRER QR SIGNÉ POUR MODE HORS-LIGNE ──
-// Le passager appelle cette route quand il est connecté
-// Le QR retourné est valable 24h et vérifiable sans internet
 app.post('/api/offline/qr', async (req, res) => {
   const { uid } = req.body;
   if (!uid) return res.status(400).json({ error: 'UID manquant' });
@@ -270,11 +263,10 @@ app.post('/api/offline/qr', async (req, res) => {
       walletId: userData.walletId,
       name:     userData.name,
       balance:  userData.balance || 0,
-      issuedAt: Date.now(),
-      expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24h
+      issuedAt:  Date.now(),
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000
     };
 
-    // Signature HMAC-SHA256
     const signature = crypto
       .createHmac('sha256', OFFLINE_SECRET)
       .update(JSON.stringify(payload))
@@ -290,8 +282,6 @@ app.post('/api/offline/qr', async (req, res) => {
 });
 
 // ── VÉRIFIER SIGNATURE QR HORS-LIGNE ──
-// Utilisé par le receveur pour vérifier un QR sans internet (côté frontend)
-// On expose la clé publique de vérification uniquement
 app.post('/api/offline/verify', async (req, res) => {
   const { payload, signature } = req.body;
   if (!payload || !signature) return res.status(400).json({ error: 'Données manquantes' });
@@ -302,9 +292,9 @@ app.post('/api/offline/verify', async (req, res) => {
       .update(JSON.stringify(payload))
       .digest('hex');
 
-    const valid     = expectedSig === signature;
-    const expired   = Date.now() > payload.expiresAt;
-    const maxOffline = 1000; // 1000 FCFA max hors-ligne
+    const valid      = expectedSig === signature;
+    const expired    = Date.now() > payload.expiresAt;
+    const maxOffline = 1000;
 
     res.json({ valid, expired, maxOffline });
 
@@ -314,7 +304,6 @@ app.post('/api/offline/verify', async (req, res) => {
 });
 
 // ── SYNC TRANSACTIONS HORS-LIGNE ──
-// Le receveur envoie toutes ses transactions stockées localement quand il retrouve internet
 app.post('/api/offline/sync', async (req, res) => {
   const { transactions } = req.body;
   if (!transactions || !Array.isArray(transactions)) {
@@ -327,7 +316,6 @@ app.post('/api/offline/sync', async (req, res) => {
     const { payload, signature, price, receiverUid, syncRef } = tx;
 
     try {
-      // 1. Vérifier signature
       const expectedSig = crypto
         .createHmac('sha256', OFFLINE_SECRET)
         .update(JSON.stringify(payload))
@@ -338,26 +326,22 @@ app.post('/api/offline/sync', async (req, res) => {
         continue;
       }
 
-      // 2. Vérifier expiration (max 24h)
       if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) {
         results.push({ syncRef, status: 'rejected', reason: 'QR expiré' });
         continue;
       }
 
-      // 3. Vérifier limite hors-ligne
       if (price > 1000) {
         results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite hors-ligne 1000 FCFA' });
         continue;
       }
 
-      // 4. Vérifier double dépense (syncRef unique)
       const existingSnap = await db.collection('offline_transactions').doc(syncRef).get();
       if (existingSnap.exists) {
         results.push({ syncRef, status: 'already_synced' });
         continue;
       }
 
-      // 5. Vérifier solde réel Firebase
       const passengerRef  = db.collection('users').doc(payload.uid);
       const passengerSnap = await passengerRef.get();
       if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
@@ -365,25 +349,21 @@ app.post('/api/offline/sync', async (req, res) => {
         continue;
       }
 
-      // 6. Appliquer la transaction (atomique)
       const receiverRef = db.collection('users').doc(receiverUid);
       const passHistRef = db.collection('users').doc(payload.uid).collection('history').doc();
       const recvHistRef = db.collection('users').doc(receiverUid).collection('history').doc();
 
       await db.runTransaction(async (t) => {
-        // Débiter passager
         t.update(passengerRef, { balance: admin.firestore.FieldValue.increment(-price) });
         t.set(passHistRef, {
           type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`,
           amount: -price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp()
         });
-        // Créditer receveur
         t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(price) });
         t.set(recvHistRef, {
           type: 'collect_offline', label: `Collecte hors-ligne — ${syncRef}`,
           amount: price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp()
         });
-        // Marquer comme synced
         t.set(db.collection('offline_transactions').doc(syncRef), {
           passengerUid: payload.uid, receiverUid, price, syncRef,
           syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced'
@@ -405,7 +385,15 @@ app.post('/api/offline/sync', async (req, res) => {
   res.json({ results, synced, rejected });
 });
 
+// ── DÉMARRAGE SERVEUR ──
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Serveur TataPay démarré sur le port ${PORT} | PAYTECH_ENV=${PAYTECH_ENV}`);
+
+  // Keep-alive : empêche Render de s'endormir (ping toutes les 9 minutes)
+  setInterval(() => {
+    https.get('https://tatapay-backend-1.onrender.com/ping', () => {})
+         .on('error', () => {});
+  }, 9 * 60 * 1000);
+  console.log('🔁 Keep-alive activé — ping toutes les 9 minutes');
 });
