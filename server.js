@@ -1,1335 +1,442 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
-<title>TataPay</title>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700;800;900&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet"/>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
-<style>
-*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-:root{--g:#009A44;--gd:#007832;--y:#FDEF42;--bk:#06120a;--w:#fff;--r:#DF0024;--orange:#FF6B00;}
-body{font-family:'Space Grotesk',sans-serif;background:var(--bk);color:var(--w);overflow-x:hidden;}
-#app{max-width:430px;margin:0 auto;min-height:100vh;position:relative;}
-.sn-stripe{height:4px;background:linear-gradient(90deg,#009A44 33.33%,#FDEF42 33.33% 66.66%,#DF0024 66.66%);}
-@keyframes slideUp{0%{transform:translateY(100%);opacity:0}100%{transform:translateY(0);opacity:1}}
-@keyframes fadeIn{0%{opacity:0;transform:translateY(8px)}100%{opacity:1;transform:translateY(0)}}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes scanMove{0%,100%{top:8%}50%{top:88%}}
-@keyframes slideDown{0%{transform:translateX(-50%) translateY(-80px);opacity:0}100%{transform:translateX(-50%) translateY(0);opacity:1}}
-@keyframes bellShake{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-15deg)}40%,80%{transform:rotate(15deg)}}
-@keyframes notifIn{0%{transform:translateX(110%);opacity:0}100%{transform:translateX(0);opacity:1}}
-@keyframes notifOut{0%{transform:translateX(0);opacity:1}100%{transform:translateX(110%);opacity:0}}
-.screen{display:none;flex-direction:column;min-height:100vh;}
-.screen.active{display:flex;}
-.btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 24px;border-radius:14px;border:none;cursor:pointer;font-weight:700;font-size:15px;font-family:'Space Grotesk',sans-serif;transition:all .18s;}
-.btn:active{transform:scale(.97);}
-.btn:disabled{opacity:.45;cursor:not-allowed;}
-.btn-primary{background:linear-gradient(135deg,var(--g),var(--gd));color:var(--w);}
-.btn-secondary{background:#ffffff15;color:var(--w);border:1px solid #ffffff22;}
-.btn-yellow{background:linear-gradient(135deg,var(--y),#E6BC00);color:var(--bk);}
-.btn-danger{background:linear-gradient(135deg,var(--r),#B71C1C);color:var(--w);}
-.btn-orange{background:linear-gradient(135deg,var(--orange),#CC4400);color:var(--w);}
-.btn-purple{background:linear-gradient(135deg,#7c3aed,#4c1d95);color:var(--w);}
-.btn-full{width:100%;}
-.input-wrap{margin-bottom:14px;}
-.input-label{font-size:13px;font-weight:700;color:#aaa;margin-bottom:5px;display:block;}
-.input-field{width:100%;padding:13px 14px;border-radius:12px;border:1.5px solid #2a3a2a;background:#ffffff0d;font-size:15px;color:var(--w);outline:none;font-family:'Space Grotesk',sans-serif;}
-.input-field::placeholder{color:#444;}
-.input-field:focus{border-color:var(--g);box-shadow:0 0 0 3px #009A4420;}
-.bottom-nav{display:flex;background:#0a1e0d;border-top:1px solid #009A4422;padding:8px 0 18px;position:sticky;bottom:0;z-index:10;}
-.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;font-size:10px;font-weight:600;padding:6px 0;font-family:'Space Grotesk',sans-serif;transition:color .2s;}
-.nav-btn.active{color:var(--g);}
-.nav-btn:not(.active){color:#555;}
-.recv-nav{display:flex;background:#0a1e0d;border-top:1px solid #FF6B0022;padding:8px 0 18px;position:sticky;bottom:0;z-index:10;}
-.recv-nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;font-size:10px;font-weight:600;padding:6px 0;font-family:'Space Grotesk',sans-serif;transition:color .2s;}
-.recv-nav-btn.active{color:var(--orange);}
-.recv-nav-btn:not(.active){color:#555;}
-.modal-overlay{position:fixed;inset:0;background:#000000cc;z-index:200;display:flex;align-items:flex-end;justify-content:center;}
-.modal-box{background:#0c1f12;border-radius:24px 24px 0 0;width:100%;max-width:430px;max-height:92vh;overflow-y:auto;border:1px solid #009A4422;animation:slideUp .3s ease;}
-.modal-header{display:flex;justify-content:space-between;align-items:center;padding:20px 24px 0;}
-.modal-body{padding:16px 24px 32px;}
-.modal-close{background:#ffffff15;border:none;border-radius:10px;padding:8px;cursor:pointer;}
-.full-modal{position:fixed;inset:0;background:#06120a;z-index:300;display:flex;flex-direction:column;max-width:430px;margin:0 auto;animation:slideUp .3s ease;}
-.tab-content{display:none;}
-.tab-content.active{display:block;}
-.scroll-area{flex:1;overflow-y:auto;}
-.card{background:#0f2016;border-radius:14px;padding:12px 16px;border:1px solid #009A4020;}
-.tx-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
-.quick-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;}
-.quick-btn{background:#ffffff0d;border:1.5px solid #2a3a2a;border-radius:10px;padding:10px 4px;color:var(--w);font-weight:800;font-size:12px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all .2s;}
-.quick-btn.sel{background:#00A65033;border-color:var(--g);color:var(--g);}
-.ticket-thermal{background:#fff;color:#111;border-radius:4px;font-family:'JetBrains Mono',monospace;padding:14px 16px;font-size:13px;line-height:1.9;border:1px dashed #ccc;}
-.ticket-thermal .t-header{text-align:center;font-weight:800;font-size:14px;border-bottom:1px dashed #999;padding-bottom:8px;margin-bottom:8px;}
-.ticket-thermal .t-sn{text-align:center;border-top:1px dashed #999;padding-top:8px;margin-top:8px;font-size:11px;color:#444;}
-.sel-tabs{display:flex;background:#ffffff0d;border-radius:12px;padding:4px;border:1px solid #ffffff12;}
-.sel-tab{flex:1;padding:10px;border-radius:10px;border:none;cursor:pointer;font-weight:700;font-size:14px;font-family:'Space Grotesk',sans-serif;transition:all .2s;}
-.pay-method-card{border:2px solid #2a3a2a;border-radius:18px;padding:20px 14px;text-align:center;cursor:pointer;background:#ffffff08;transition:all .22s;flex:1;}
-.pay-method-card.sel-wave{border-color:#1a56db;background:#1a56db18;}
-.pay-method-card.sel-om{border-color:var(--orange);background:#FF6B0018;}
-.step-dots{display:flex;gap:8px;justify-content:center;margin-bottom:20px;}
-.step-dot{width:8px;height:8px;border-radius:4px;background:#ffffff20;transition:all .3s;}
-.step-dot.active{width:24px;background:var(--g);}
-.step-dot.done{background:var(--g);opacity:.5;}
-.trajet-row{display:flex;align-items:center;gap:10px;background:#ffffff08;border:1px solid #2a3a2a;border-radius:14px;padding:12px 14px;margin-bottom:8px;}
-.sygost{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:500;width:calc(100% - 32px);max-width:400px;animation:slideDown .35s ease;display:none;}
-.sygost.show{display:block;}
-.sygost-inner{background:var(--w);border-radius:16px;padding:14px 16px;box-shadow:0 8px 32px #0006;display:flex;align-items:flex-start;gap:12px;border:1px solid #e5e7eb;}
-#globalLoader{position:fixed;inset:0;background:#06120acc;z-index:999;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
-#globalLoader.show{display:flex;}
-.spinner{width:44px;height:44px;border:4px solid #009A4433;border-top:4px solid var(--g);border-radius:50%;animation:spin 1s linear infinite;}
-.recv-toast-stack{position:fixed;top:72px;right:12px;z-index:550;display:flex;flex-direction:column;gap:10px;max-width:300px;}
-.recv-toast{background:#0c1f12;border:2px solid var(--orange);border-radius:16px;padding:12px 14px;animation:notifIn .35s ease;position:relative;}
-.recv-toast.out{animation:notifOut .3s ease forwards;}
-.bell-wrap{position:relative;display:inline-flex;}
-.bell-badge{position:absolute;top:-4px;right:-4px;background:var(--r);color:#fff;border-radius:8px;padding:1px 5px;font-size:9px;font-weight:900;min-width:14px;text-align:center;display:none;}
-.bell-badge.show{display:block;}
-.bell-anim{animation:bellShake .5s ease;}
-.ticket-overlay{position:fixed;inset:0;background:#000000dd;z-index:250;display:flex;align-items:center;justify-content:center;padding:20px;}
-.descend-btn{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:100;max-width:390px;width:calc(100% - 40px);}
-.descend-inner{background:linear-gradient(135deg,#DF0024,#B71C1C);border:none;border-radius:20px;padding:16px 20px;width:100%;cursor:pointer;display:flex;align-items:center;justify-content:space-between;box-shadow:0 6px 24px #DF002466;font-family:'Space Grotesk',sans-serif;}
-.notif-panel{position:fixed;inset:0;background:#000000cc;z-index:350;display:flex;align-items:flex-end;justify-content:center;}
-.notif-box{background:#0c1f12;border-radius:24px 24px 0 0;width:100%;max-width:430px;max-height:80vh;overflow-y:auto;border:1px solid #FF6B0044;animation:slideUp .3s ease;}
-.camera-screen{position:fixed;inset:0;background:#000;z-index:400;display:none;flex-direction:column;max-width:430px;margin:0 auto;}
-.camera-screen.open{display:flex;}
-#cameraVideo{width:100%;height:100%;object-fit:cover;}
-.camera-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;}
-.camera-frame{width:240px;height:240px;position:relative;}
-.cam-corner{position:absolute;width:34px;height:34px;}
-.cam-corner.tl{top:0;left:0;border-top:4px solid #009A44;border-left:4px solid #009A44;border-radius:6px 0 0 0;}
-.cam-corner.tr{top:0;right:0;border-top:4px solid #009A44;border-right:4px solid #009A44;border-radius:0 6px 0 0;}
-.cam-corner.bl{bottom:0;left:0;border-bottom:4px solid #009A44;border-left:4px solid #009A44;border-radius:0 0 0 6px;}
-.cam-corner.br{bottom:0;right:0;border-bottom:4px solid #009A44;border-right:4px solid #009A44;border-radius:0 0 6px 0;}
-.cam-scanline{position:absolute;left:4px;right:4px;height:3px;background:linear-gradient(90deg,transparent,#009A44,#FDEF42,#DF0024,transparent);border-radius:2px;animation:scanMove 1.8s ease-in-out infinite;top:50%;}
-.cam-error{background:#DF0024cc;border-radius:14px;padding:14px 20px;margin-top:20px;color:#fff;font-size:13px;font-weight:700;text-align:center;max-width:300px;line-height:1.5;}
-.camera-toolbar{position:absolute;bottom:0;left:0;right:0;padding:24px 20px 40px;display:flex;justify-content:center;background:linear-gradient(0deg,#000000cc,transparent);}
-</style>
-</head>
-<body>
-<div id="app">
+const express   = require('express');
+const cors      = require('cors');
+const admin     = require('firebase-admin');
+const crypto    = require('crypto');
+const https     = require('https');
+const rateLimit = require('express-rate-limit');
+const app       = express();
 
-<div id="globalLoader"><div class="spinner"></div><div style="color:#009A44;font-weight:800;font-size:15px;" id="loaderMsg">Chargement…</div></div>
+// ── CORS SÉCURISÉ ──
+app.use(cors({
+  origin: [
+    'https://tatapay-a4972.web.app',
+    'https://tatapay-a4972.firebaseapp.com',
+    'http://localhost:8081',
+    'http://localhost:19006',
+    'exp://192.168.1.91:8081'
+  ]
+}));
 
-<div class="sygost" id="sygostNotif">
-  <div class="sygost-inner">
-    <div style="font-size:22px;" id="sygostIcon">📋</div>
-    <div style="flex:1"><div style="font-weight:800;color:#111;font-size:14px;" id="sygostTitle"></div><div style="color:#555;font-size:13px;margin-top:2px;" id="sygostBody"></div></div>
-    <button onclick="hideSygost()" style="background:none;border:none;cursor:pointer;padding:4px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-  </div>
-</div>
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-<div class="recv-toast-stack" id="recvToastStack"></div>
+// ── VARIABLES D'ENVIRONNEMENT ──
+const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY    || '').trim();
+const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
+const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
+const OFFLINE_SECRET     = (process.env.OFFLINE_SECRET || 'tatapay-offline-secret-2026').trim();
 
-<div class="descend-btn" id="descendBtn" style="display:none;">
-  <button class="descend-inner" onclick="demandDescendre()">
-    <div style="display:flex;align-items:center;gap:12px;">
-      <div style="font-size:28px;">🚪</div>
-      <div style="text-align:left;"><div style="color:#fff;font-weight:900;font-size:15px;">Je veux descendre</div><div style="color:#ffaaaa;font-size:11px;" id="descendInfo">Prévenir le receveur</div></div>
-    </div>
-    <div style="background:#ffffff22;border-radius:12px;padding:8px 12px;color:#fff;font-weight:800;font-size:12px;">STOP 🛑</div>
-  </button>
-</div>
+// ── FIREBASE ──
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+const db = admin.firestore();
 
-<div class="ticket-overlay" id="ticketOverlay" style="display:none">
-  <div style="width:100%;max-width:360px;">
-    <div class="ticket-thermal" id="ticketThermalContent"></div>
-    <button class="btn btn-primary btn-full" style="margin-top:14px;" onclick="closeTicket()">✓ Fermer</button>
-  </div>
-</div>
-
-<div class="camera-screen" id="cameraScreen">
-  <video id="cameraVideo" autoplay playsinline muted></video>
-  <div style="position:absolute;top:0;left:0;right:0;padding:52px 20px 12px;background:linear-gradient(180deg,#000000cc,transparent);"><div style="color:#fff;font-weight:900;font-size:17px;" id="camTitle">Scanner QR</div></div>
-  <div class="camera-overlay">
-    <div class="camera-frame">
-      <div class="cam-corner tl"></div><div class="cam-corner tr"></div>
-      <div class="cam-corner bl"></div><div class="cam-corner br"></div>
-      <div class="cam-scanline"></div>
-    </div>
-    <div style="color:#fff;font-weight:800;font-size:15px;margin-top:24px;text-shadow:0 2px 8px #000;" id="camLabel">Pointez vers le QR Code</div>
-    <div class="cam-error" id="camError" style="display:none;"></div>
-  </div>
-  <button onclick="flipCamera()" style="position:absolute;top:52px;right:20px;background:#ffffff22;border:none;border-radius:12px;padding:10px;cursor:pointer;pointer-events:all;">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
-  </button>
-  <div class="camera-toolbar"><button onclick="stopCamera()" style="padding:12px 32px;border-radius:14px;border:none;cursor:pointer;background:#ffffff22;color:#fff;font-weight:800;font-size:14px;font-family:'Space Grotesk',sans-serif;pointer-events:all;">✕ Fermer</button></div>
-</div>
-
-<!-- SPLASH -->
-<div class="screen active" id="screenSplash" style="background:linear-gradient(180deg,#06120a,#0c2010);justify-content:space-between;">
-  <div class="sn-stripe"></div>
-  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;text-align:center;">
-    <svg width="80" height="54" viewBox="0 0 90 60" style="border-radius:8px;margin-bottom:20px;display:block;">
-      <rect width="30" height="60" fill="#009A44"/><rect x="30" width="30" height="60" fill="#FDEF42"/><rect x="60" width="30" height="60" fill="#DF0024"/>
-      <polygon points="45,18 47.9,27 57,27 49.5,32.5 52.4,41.5 45,36 37.6,41.5 40.5,32.5 33,27 42.1,27" fill="#009A44"/>
-    </svg>
-    <div style="font-weight:900;font-size:46px;line-height:1;letter-spacing:-2px;margin-bottom:6px;">Tata<span style="color:var(--y)">Pay</span></div>
-    <div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;background:linear-gradient(90deg,#009A44,#FDEF42,#DF0024);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:800;margin-bottom:8px;">🇸🇳 AFTU · CAPTRANS · Transport</div>
-    <div style="color:#ffffff22;font-size:11px;font-family:'JetBrains Mono',monospace;">== TRANSPAY == AFTU == CAPTRANS ==</div>
-  </div>
-  <div style="padding:0 24px 44px;display:flex;flex-direction:column;gap:12px;">
-    <button class="btn btn-yellow btn-full" onclick="goAuth('register')">👤 S'inscrire</button>
-    <button class="btn btn-secondary btn-full" onclick="goAuth('login')">Se connecter</button>
-  </div>
-  <div class="sn-stripe"></div>
-</div>
-
-<!-- AUTH -->
-<div class="screen" id="screenAuth">
-  <div class="sn-stripe"></div>
-  <div style="background:#0c1f12;padding:28px 24px 20px;border-bottom:1px solid #009A4422;">
-    <button onclick="goSplash()" style="background:#ffffff15;border:none;border-radius:10px;padding:8px 14px;cursor:pointer;color:var(--w);margin-bottom:16px;font-family:'Space Grotesk',sans-serif;font-size:13px;">← Retour</button>
-    <div style="font-weight:900;font-size:22px;" id="authTitle">Connexion</div>
-  </div>
-  <div style="padding:20px 24px;flex:1;overflow-y:auto;">
-    <div class="sel-tabs" style="margin-bottom:20px;">
-      <button class="sel-tab" id="tabPassenger" onclick="setRole('passenger')" style="background:var(--g);color:var(--w);">🧍 Passager</button>
-      <button class="sel-tab" id="tabReceiver" onclick="setRole('receiver')" style="background:transparent;color:#888;">🎫 Receveur</button>
-    </div>
-    <div id="fieldName" style="display:none"><div class="input-wrap"><label class="input-label">Nom complet *</label><input class="input-field" id="authName" placeholder="Moussa Diallo"/></div></div>
-    <div class="input-wrap"><label class="input-label">E-mail *</label><input class="input-field" id="authEmail" type="email" placeholder="exemple@email.com"/></div>
-    <div id="fieldPhone" style="display:none"><div class="input-wrap"><label class="input-label">Téléphone *</label><input class="input-field" id="authPhone" type="tel" placeholder="77 123 45 67"/></div></div>
-    <div id="fieldsReceiver" style="display:none;">
-      <div class="input-wrap"><label class="input-label">GIE *</label><input class="input-field" id="authGIE" placeholder="DPL"/></div>
-      <div class="input-wrap"><label class="input-label">N° Véhicule *</label><input class="input-field" id="authVehicle" placeholder="AA809ST"/></div>
-      <div class="input-wrap"><label class="input-label">Ligne *</label><input class="input-field" id="authLigne" placeholder="72"/></div>
-      <div class="input-wrap"><label class="input-label">Zone *</label><input class="input-field" id="authZone" placeholder="B"/></div>
-    </div>
-    <div class="input-wrap"><label class="input-label">Mot de passe *</label><input class="input-field" id="authPass" type="password" placeholder="••••••••"/></div>
-    <div id="fieldPass2" style="display:none"><div class="input-wrap"><label class="input-label">Confirmer *</label><input class="input-field" id="authPass2" type="password" placeholder="••••••••"/></div></div>
-    <button class="btn btn-primary btn-full" onclick="doAuth()" id="authSubmitBtn">Se connecter</button>
-    <div style="text-align:center;margin-top:18px;color:#666;font-size:14px;">
-      <span id="authSwitchText">Pas de compte ?</span>
-      <span onclick="toggleAuthMode()" style="color:var(--g);font-weight:700;cursor:pointer;margin-left:4px;" id="authSwitchLink">S'inscrire</span>
-    </div>
-  </div>
-</div>
-
-<!-- PASSENGER -->
-<div class="screen" id="screenPassenger">
-  <div class="scroll-area">
-    <div class="tab-content active" id="passTab-home">
-      <div class="sn-stripe"></div>
-      <div style="padding:20px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-          <div style="font-weight:900;font-size:22px;">Tata<span style="color:var(--y)">Pay</span></div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <div style="text-align:right;"><div style="font-size:11px;color:#888;">Bonjour 👋</div><div style="font-weight:800;font-size:14px;" id="passGreet">—</div></div>
-            <button onclick="doLogout()" style="background:#ffffff15;border:none;border-radius:10px;padding:8px;cursor:pointer;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
-          </div>
-        </div>
-        <div style="background:linear-gradient(135deg,#061a0a,#0d2e10);border-radius:24px;padding:22px 20px 20px;margin-bottom:18px;border:1px solid #009A4433;position:relative;overflow:hidden;">
-          <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);"></div>
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
-            <div style="font-size:11px;color:#ffffff55;">Solde TataPay</div>
-            <div style="background:#ffffff12;border-radius:8px;padding:4px 10px;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:900;" id="passWalletId">TP-…</div>
-          </div>
-          <div style="color:var(--y);font-weight:900;font-size:38px;letter-spacing:-1px;margin-bottom:14px;"><span id="passBalance">0</span> <span style="font-size:16px;font-weight:700;color:#FDEF4288;">FCFA</span></div>
-          <div style="display:flex;justify-content:center;margin-bottom:18px;"><div id="passQRWrap"></div></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <button onclick="openRecharge()" style="background:linear-gradient(160deg,#1a56db,#0d3a8c);border:2px solid #4d8aff66;border-radius:16px;padding:14px 6px 12px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:7px;color:#fff;font-weight:900;font-size:11px;font-family:'Space Grotesk',sans-serif;"><div style="font-size:22px;">💳</div>Recharger</button>
-            <button onclick="openSend()" style="background:linear-gradient(160deg,#FF6B00,#cc3d00);border:2px solid #ff8c3366;border-radius:16px;padding:14px 6px 12px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:7px;color:#fff;font-weight:900;font-size:11px;font-family:'Space Grotesk',sans-serif;"><div style="font-size:22px;">↗️</div>Transfert</button>
-            <button onclick="openTicketFlow()" style="background:linear-gradient(160deg,#6d28d9,#3b0764);border:2px solid #a78bfa66;border-radius:16px;padding:14px 6px 12px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:7px;color:#fff;font-weight:900;font-size:11px;font-family:'Space Grotesk',sans-serif;"><div style="font-size:22px;">🎫</div>Ticket</button>
-            <button onclick="openCamera('friend')" style="background:linear-gradient(160deg,#059669,#065f46);border:2px solid #34d39966;border-radius:16px;padding:14px 6px 12px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:7px;color:#fff;font-weight:900;font-size:11px;font-family:'Space Grotesk',sans-serif;"><div style="font-size:22px;">📷</div>Scan Ami</button>
-          </div>
-        </div>
-        <div id="activeTicketBanner" style="display:none;background:#DF002415;border:2px solid #DF002466;border-radius:18px;padding:14px 16px;margin-bottom:16px;cursor:pointer;" onclick="showActiveTicket()">
-          <div style="font-size:10px;color:#ff8888;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;">🚌 Ticket en cours</div>
-          <div style="font-weight:900;font-size:15px;" id="activeTicketLabel">—</div>
-          <div style="color:#ff8888;font-size:12px;margin-top:2px;">Appuyez pour voir · Bouton descendre en bas 👇</div>
-        </div>
-        <div style="font-weight:800;font-size:15px;margin-bottom:12px;">Dernières transactions</div>
-        <div id="passHomeTx"></div>
-      </div>
-    </div>
-    <div class="tab-content" id="passTab-tickets">
-      <div class="sn-stripe"></div>
-      <div style="padding:20px;"><div style="font-weight:900;font-size:22px;margin-bottom:18px;">🎫 Mes Tickets</div><div id="passTicketsContainer"></div></div>
-    </div>
-    <div class="tab-content" id="passTab-history">
-      <div style="padding:20px;"><div style="font-weight:900;font-size:22px;margin-bottom:18px;">Historique</div><div id="passHistory"></div></div>
-    </div>
-    <div class="tab-content" id="passTab-profile">
-      <div class="sn-stripe"></div>
-      <div style="padding:20px;text-align:center;">
-        <div style="width:80px;height:80px;border-radius:40px;background:linear-gradient(135deg,var(--g),var(--gd));display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 12px;border:3px solid var(--y);">🧍</div>
-        <div style="font-weight:900;font-size:20px;" id="profileName">—</div>
-        <div style="color:#666;font-size:13px;margin-bottom:20px;" id="profileEmail">—</div>
-        <div id="profileQRWrap" style="margin-bottom:8px;"></div>
-        <div style="color:#666;font-size:12px;margin-bottom:24px;">QR Wallet — montrez à un ami</div>
-        <button class="btn btn-danger btn-full" onclick="doLogout()">Se déconnecter</button>
-      </div>
-    </div>
-  </div>
-  <div class="bottom-nav" style="position:relative;">
-    <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);"></div>
-    <button class="nav-btn active" id="nav-home" onclick="switchTab('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Accueil</button>
-    <button class="nav-btn" id="nav-tickets" onclick="switchTab('tickets')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 9a2 2 0 012-2h16a2 2 0 012 2v2a2 2 0 000 4v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2a2 2 0 000-4V9z"/></svg>Tickets</button>
-    <button class="nav-btn" id="nav-history" onclick="switchTab('history')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Historique</button>
-    <button class="nav-btn" id="nav-profile" onclick="switchTab('profile')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Profil</button>
-  </div>
-</div>
-
-<!-- RECEIVER -->
-<div class="screen" id="screenReceiver">
-  <div class="scroll-area">
-    <div class="tab-content active" id="recvTab-home">
-      <div class="sn-stripe"></div>
-      <div style="background:linear-gradient(135deg,#1a0500,#2e0a00);padding:18px 20px 14px;border-bottom:1px solid #FF6B0022;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div>
-            <div style="font-size:10px;color:#FF6B0088;letter-spacing:2px;font-family:'JetBrains Mono',monospace;">== TRANSPAY == AFTU ==</div>
-            <div style="font-weight:900;font-size:18px;margin-top:4px;" id="recvGreet">—</div>
-            <div style="color:#888;font-size:12px;font-family:'JetBrains Mono',monospace;" id="recvInfoLine">—</div>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <button onclick="openNotifPanel()" style="background:#FF6B0022;border:1px solid #FF6B0044;border-radius:12px;padding:10px;cursor:pointer;">
-              <div class="bell-wrap"><svg id="bellIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF6B00" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg><span class="bell-badge" id="bellBadge">0</span></div>
-            </button>
-            <button onclick="doLogout()" style="background:#ffffff15;border:none;border-radius:10px;padding:8px;cursor:pointer;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
-          </div>
-        </div>
-      </div>
-      <div style="padding:18px 20px;">
-        <div style="background:linear-gradient(135deg,#1a0500,#2e0a00);border:2px solid #FF6B0044;border-radius:20px;padding:18px;margin-bottom:16px;position:relative;overflow:hidden;">
-          <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);"></div>
-          <div style="font-size:11px;color:#FF6B0088;margin-bottom:4px;">Solde TataPay Receveur</div>
-          <div style="color:var(--y);font-weight:900;font-size:32px;margin-bottom:14px;"><span id="recvBalance">0</span> <span style="font-size:14px;font-weight:700;color:#FDEF4288;">FCFA</span></div>
-          <button onclick="openWithdraw()" style="background:linear-gradient(135deg,#009A44,#007832);border:none;border-radius:14px;padding:13px 20px;cursor:pointer;display:flex;align-items:center;gap:10px;color:#fff;font-weight:900;font-size:14px;font-family:'Space Grotesk',sans-serif;width:100%;justify-content:center;">
-            <span style="font-size:20px;">💸</span> Retirer mon argent
-          </button>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
-          <div class="card" style="text-align:center;"><div style="color:#888;font-size:10px;text-transform:uppercase;">Recettes jour</div><div style="color:var(--g);font-weight:900;font-size:22px;margin-top:4px;" id="recvTotalToday">0 F</div></div>
-          <div class="card" style="text-align:center;"><div style="color:#888;font-size:10px;text-transform:uppercase;">Tickets validés</div><div style="color:var(--orange);font-weight:900;font-size:22px;margin-top:4px;" id="recvTicketCount">0</div></div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
-          <button onclick="openCamera('recv')" style="background:linear-gradient(135deg,#009A44,#007832);border:none;border-radius:16px;padding:16px 10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;color:#fff;font-weight:900;font-size:12px;font-family:'Space Grotesk',sans-serif;"><div style="font-size:28px;">📷</div>Scanner Passager</button>
-          <button onclick="openRecvCharge()" style="background:linear-gradient(135deg,#1a56db,#0d3a8c);border:none;border-radius:16px;padding:16px 10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;color:#fff;font-weight:900;font-size:12px;font-family:'Space Grotesk',sans-serif;"><div style="font-size:28px;">💳</div>Recharger Wallet</button>
-        </div>
-        <div style="background:#ffffff08;border:1px solid #FF6B0022;border-radius:18px;padding:16px;margin-bottom:16px;">
-          <div style="font-weight:800;font-size:14px;margin-bottom:12px;">🚌 QR Marchand officiel</div>
-          <div id="recvBusQRWrap"></div>
-        </div>
-        <div style="font-weight:800;font-size:15px;margin-bottom:10px;">⏳ Demandes en attente</div>
-        <div id="recvPending"><div style="text-align:center;color:#555;padding:16px 0;font-size:13px;">Aucune demande.</div></div>
-      </div>
-    </div>
-    <div class="tab-content" id="recvTab-trajets">
-      <div style="padding:20px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-          <div><div style="font-weight:900;font-size:22px;">📍 Sections & Trajets</div></div>
-          <button onclick="openAddTrajet()" style="background:linear-gradient(135deg,var(--g),var(--gd));border:none;border-radius:14px;padding:10px 14px;cursor:pointer;color:#fff;font-weight:800;font-size:13px;font-family:'Space Grotesk',sans-serif;">+ Ajouter</button>
-        </div>
-        <div id="trajetsList"></div>
-      </div>
-    </div>
-    <div class="tab-content" id="recvTab-tickets">
-      <div style="padding:20px;"><div style="font-weight:900;font-size:22px;margin-bottom:18px;">🎫 Tickets Émis</div><div id="recvTicketsList"></div></div>
-    </div>
-  </div>
-  <div class="recv-nav" style="position:relative;">
-    <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);"></div>
-    <button class="recv-nav-btn active" id="rnav-home" onclick="switchRecvTab('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Accueil</button>
-    <button class="recv-nav-btn" id="rnav-trajets" onclick="switchRecvTab('trajets')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>Trajets</button>
-    <button class="recv-nav-btn" id="rnav-tickets" onclick="switchRecvTab('tickets')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 9a2 2 0 012-2h16a2 2 0 012 2v2a2 2 0 000 4v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2a2 2 0 000-4V9z"/></svg>Tickets</button>
-  </div>
-</div>
-
-<!-- MODALS -->
-<div class="notif-panel" id="notifPanel" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
-  <div class="notif-box" onclick="event.stopPropagation()">
-    <div style="height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);border-radius:24px 24px 0 0;"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px 0;"><div style="font-weight:900;font-size:18px;">🔔 Notifications</div><button onclick="document.getElementById('notifPanel').style.display='none'" style="background:#ffffff15;border:none;border-radius:10px;padding:8px;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-    <div style="padding:16px 24px 32px;"><div id="notifList"></div><button onclick="clearNotifs()" style="width:100%;background:#ffffff08;border:1px solid #ffffff15;border-radius:12px;padding:10px;cursor:pointer;color:#888;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13px;margin-top:12px;">🗑️ Tout effacer</button></div>
-  </div>
-</div>
-
-<!-- MODAL RETRAIT PAYTECH -->
-<div class="modal-overlay" id="modalWithdraw" style="display:none;" onclick="if(event.target===this)closeModal('modalWithdraw')">
-  <div class="modal-box" onclick="event.stopPropagation()">
-    <div style="height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);border-radius:24px 24px 0 0;"></div>
-    <div class="modal-header">
-      <div><div style="font-weight:900;font-size:18px;">💸 Retirer mon argent</div><div style="font-size:11px;color:#FF6B00;font-family:'JetBrains Mono',monospace;margin-top:2px;">via PayTech Sénégal</div></div>
-      <button class="modal-close" onclick="closeModal('modalWithdraw')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="modal-body">
-      <div style="background:#009A4415;border:1.5px solid #009A4444;border-radius:14px;padding:12px 16px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:13px;color:#aaa;">Solde disponible</div>
-        <div style="font-weight:900;font-size:20px;color:var(--y);" id="withdrawAvailable">0 FCFA</div>
-      </div>
-      <div id="wdStep1">
-        <div style="font-weight:800;font-size:14px;margin-bottom:12px;">Montant à retirer :</div>
-        <div class="quick-grid">
-          <button class="quick-btn" onclick="document.getElementById('wdAmt').value=1000">1 000</button>
-          <button class="quick-btn" onclick="document.getElementById('wdAmt').value=2000">2 000</button>
-          <button class="quick-btn" onclick="document.getElementById('wdAmt').value=5000">5 000</button>
-          <button class="quick-btn" onclick="document.getElementById('wdAmt').value=10000">10 000</button>
-        </div>
-        <input class="input-field" id="wdAmt" type="number" placeholder="Montant en FCFA" style="margin-bottom:16px;"/>
-        <button class="btn btn-primary btn-full" onclick="wdGoStep2()">Continuer →</button>
-      </div>
-      <div id="wdStep2" style="display:none;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-          <button onclick="wdBackStep1()" style="background:#ffffff15;border:none;border-radius:10px;padding:8px 12px;cursor:pointer;color:#aaa;font-family:'Space Grotesk',sans-serif;font-size:13px;">← Retour</button>
-          <div style="font-weight:800;font-size:14px;">Confirmer le retrait</div>
-        </div>
-        <div style="background:#ffffff08;border-radius:18px;padding:24px;text-align:center;margin-bottom:18px;">
-          <div style="font-size:13px;color:#888;margin-bottom:6px;">Montant à retirer</div>
-          <div style="font-weight:900;font-size:32px;color:var(--y);" id="wdAmtBig">— FCFA</div>
-          <div style="margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#666;">Vous serez redirigé vers PayTech pour choisir votre opérateur (Wave, Orange Money, Free Money…) et finaliser le retrait.</div>
-        </div>
-        <button class="btn btn-full" onclick="doWithdraw()" style="background:linear-gradient(135deg,#7c3aed,#4c1d95);color:#fff;font-weight:900;font-size:15px;padding:16px;">💸 Retirer via PayTech</button>
-      </div>
-      <div id="wdStep3" style="display:none;text-align:center;padding:30px 0;">
-        <div class="spinner" style="margin:0 auto 18px;"></div>
-        <div style="font-weight:800;font-size:15px;color:#aaa;">Connexion à PayTech…</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL RECHARGE WALLET PASSAGER PAR RECEVEUR -->
-<div class="modal-overlay" id="modalRecvCharge" style="display:none;" onclick="if(event.target===this)closeModal('modalRecvCharge')">
-  <div class="modal-box" onclick="event.stopPropagation()">
-    <div style="height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);border-radius:24px 24px 0 0;"></div>
-    <div class="modal-header">
-      <div><div style="font-weight:900;font-size:18px;">💳 Recharger Wallet Passager</div><div style="font-size:11px;color:#888;font-family:'JetBrains Mono',monospace;margin-top:2px;">Transfert interne TataPay</div></div>
-      <button class="modal-close" onclick="closeModal('modalRecvCharge')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="modal-body">
-      <div style="background:#009A4415;border:1.5px solid #009A4444;border-radius:14px;padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:13px;color:#aaa;">Votre solde</div>
-        <div style="font-weight:900;font-size:18px;color:var(--y);" id="rcRecvBalance">0 FCFA</div>
-      </div>
-      <div class="input-wrap">
-        <label class="input-label">ID Wallet Passager *</label>
-        <div style="display:flex;gap:8px;">
-          <input class="input-field" id="rcWalletId" placeholder="TP-XXXXXX" style="flex:1;" oninput="rcClearPreview()"/>
-          <button onclick="openCamera('wallet-scan')" style="background:linear-gradient(135deg,var(--g),var(--gd));border:none;border-radius:12px;padding:12px;cursor:pointer;flex-shrink:0;">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="16" y="3" width="5" height="5" rx="1"/><rect x="3" y="16" width="5" height="5" rx="1"/><path d="M16 16h5v5h-5z"/></svg>
-          </button>
-        </div>
-      </div>
-      <div id="rcPassengerPreview" style="display:none;background:#00A65015;border:1px solid #00A65044;border-radius:12px;padding:10px 14px;margin-bottom:14px;"></div>
-      <div class="input-wrap">
-        <label class="input-label">Montant (FCFA) *</label>
-        <div class="quick-grid">
-          <button class="quick-btn" onclick="document.getElementById('rcAmt').value=500">500</button>
-          <button class="quick-btn" onclick="document.getElementById('rcAmt').value=1000">1 000</button>
-          <button class="quick-btn" onclick="document.getElementById('rcAmt').value=2000">2 000</button>
-          <button class="quick-btn" onclick="document.getElementById('rcAmt').value=5000">5 000</button>
-        </div>
-        <input class="input-field" id="rcAmt" type="number" placeholder="Montant en FCFA"/>
-      </div>
-      <button class="btn btn-yellow btn-full" style="margin-top:4px;" onclick="doRecvCharge()">✅ Valider la recharge</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL RECHARGE PASSAGER (PayTech RÉEL) -->
-<div class="modal-overlay" id="modalRecharge" style="display:none;" onclick="if(event.target===this)closeModal('modalRecharge')">
-  <div class="modal-box" onclick="event.stopPropagation()">
-    <div style="height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);border-radius:24px 24px 0 0;"></div>
-    <div class="modal-header">
-      <div><div style="font-weight:900;font-size:18px;">💰 Recharger mon compte</div><div style="font-size:11px;color:#7ab4ff;font-family:'JetBrains Mono',monospace;margin-top:2px;">via PayTech Sénégal</div></div>
-      <button class="modal-close" onclick="closeModal('modalRecharge')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="modal-body">
-      <div id="rgStep1">
-        <div style="font-weight:800;font-size:14px;margin-bottom:12px;">Montant à recharger :</div>
-        <div class="quick-grid">
-          <button class="quick-btn" onclick="selQuickAmt(500,this)">500</button>
-          <button class="quick-btn" onclick="selQuickAmt(1000,this)">1 000</button>
-          <button class="quick-btn" onclick="selQuickAmt(2000,this)">2 000</button>
-          <button class="quick-btn" onclick="selQuickAmt(5000,this)">5 000</button>
-        </div>
-        <input class="input-field" id="rechargeAmt" type="number" placeholder="Montant en FCFA" style="margin-bottom:16px;"/>
-        <button class="btn btn-primary btn-full" onclick="rgGoStep2()">Continuer →</button>
-      </div>
-      <div id="rgStep2" style="display:none;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-          <button onclick="rgBackStep1()" style="background:#ffffff15;border:none;border-radius:10px;padding:8px 12px;cursor:pointer;color:#aaa;font-family:'Space Grotesk',sans-serif;font-size:13px;">← Retour</button>
-          <div style="font-weight:800;font-size:14px;">Confirmer la recharge</div>
-        </div>
-        <div style="background:#ffffff08;border-radius:18px;padding:24px;text-align:center;margin-bottom:18px;">
-          <div style="font-size:13px;color:#888;margin-bottom:6px;">Montant à recharger</div>
-          <div style="font-weight:900;font-size:32px;color:var(--y);" id="rgAmtBig">— FCFA</div>
-          <div style="margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#666;">Vous allez être redirigé vers PayTech pour choisir votre moyen de paiement (Wave, Orange Money, Free Money…) et confirmer la transaction.</div>
-        </div>
-        <button class="btn btn-full" onclick="rgPayWithPaytech()" style="background:linear-gradient(135deg,#7c3aed,#4c1d95);color:#fff;font-weight:900;font-size:15px;padding:16px;">💳 Payer via PayTech</button>
-      </div>
-      <div id="rgStep3" style="display:none;text-align:center;padding:30px 0;">
-        <div class="spinner" style="margin:0 auto 18px;"></div>
-        <div style="font-weight:800;font-size:15px;color:#aaa;">Connexion à PayTech…</div>
-        <div style="color:#666;font-size:12px;margin-top:8px;">Vous allez être redirigé…</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="modal-overlay" id="modalSend" style="display:none;" onclick="if(event.target===this)closeModal('modalSend')">
-  <div class="modal-box" onclick="event.stopPropagation()">
-    <div style="height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);border-radius:24px 24px 0 0;"></div>
-    <div class="modal-header"><div style="font-weight:900;font-size:18px;">↗️ Transfert</div><button class="modal-close" onclick="closeModal('modalSend')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-    <div class="modal-body">
-      <div id="friendPreview" style="display:none;background:#00A65015;border:2px solid #00A65044;border-radius:14px;padding:12px 14px;margin-bottom:14px;align-items:center;gap:12px;">
-        <div style="width:40px;height:40px;border-radius:20px;background:linear-gradient(135deg,var(--g),var(--gd));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">🧍</div>
-        <div style="flex:1;"><div style="font-weight:900;" id="friendName">—</div><div style="color:#888;font-size:12px;" id="friendWalletId">—</div></div>
-        <button onclick="clearFriend()" style="background:#ffffff12;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;color:#888;font-size:12px;">✕</button>
-      </div>
-      <div id="friendManualWrap">
-        <div style="display:flex;gap:8px;margin-bottom:14px;">
-          <input class="input-field" id="sendTarget" placeholder="TP-XXXXXX" style="flex:1;"/>
-          <button onclick="openCamera('friend')" style="background:linear-gradient(135deg,#059669,#065f46);border:none;border-radius:12px;padding:12px;cursor:pointer;flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="16" y="3" width="5" height="5" rx="1"/><rect x="3" y="16" width="5" height="5" rx="1"/><path d="M16 16h5v5h-5z"/></svg></button>
-        </div>
-      </div>
-      <div class="quick-grid"><button class="quick-btn" onclick="document.getElementById('sendAmt').value=500">500</button><button class="quick-btn" onclick="document.getElementById('sendAmt').value=1000">1 000</button><button class="quick-btn" onclick="document.getElementById('sendAmt').value=2000">2 000</button><button class="quick-btn" onclick="document.getElementById('sendAmt').value=5000">5 000</button></div>
-      <div class="input-wrap"><label class="input-label">Montant (FCFA)</label><input class="input-field" id="sendAmt" type="number" placeholder="1000"/></div>
-      <button class="btn btn-orange btn-full" onclick="doSend()">Envoyer →</button>
-    </div>
-  </div>
-</div>
-
-<div class="full-modal" id="modalTicketFlow" style="display:none;">
-  <div style="height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);"></div>
-  <div style="display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid #009A4422;">
-    <button onclick="closeModal('modalTicketFlow')" style="background:#ffffff15;border:none;border-radius:10px;padding:8px;cursor:pointer;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    <div style="font-weight:900;font-size:18px;">🎫 Acheter un Ticket</div>
-  </div>
-  <div style="flex:1;overflow-y:auto;padding:20px;">
-    <div class="step-dots"><div class="step-dot active" id="tdot0"></div><div class="step-dot" id="tdot1"></div><div class="step-dot" id="tdot2"></div><div class="step-dot" id="tdot3"></div></div>
-    <div id="ticketStep0"><div style="font-weight:900;font-size:20px;margin-bottom:4px;">Étape 1 · Scanner le Bus</div><div style="color:#888;font-size:13px;margin-bottom:24px;">Scannez le QR marchand dans le bus.</div><button class="btn btn-primary btn-full" onclick="openCamera('bus')" style="padding:18px;">📷 Scanner QR du Bus</button></div>
-    <div id="ticketStep1" style="display:none;">
-      <div style="font-weight:900;font-size:20px;margin-bottom:4px;">Étape 2 · Destination</div>
-      <div style="background:#00A65015;border:2px solid #00A65044;border-radius:14px;padding:12px 14px;margin-bottom:16px;display:flex;align-items:center;gap:12px;"><div style="font-size:24px;">🚌</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;" id="detectedBusInfo">—</div></div>
-      <div id="destList" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;"></div>
-      <div style="background:#ffffff0a;border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;"><div style="color:#888;font-size:13px;">À payer</div><div style="font-weight:900;font-size:22px;color:var(--y);" id="ticketPriceDisplay">— FCFA</div></div>
-      <div id="payMethodWrap" style="display:none;margin-bottom:16px;">
-        <div style="font-weight:800;font-size:13px;color:#aaa;margin-bottom:10px;">Choisissez votre moyen de paiement :</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <button id="flowWaveBtn" onclick="selFlowMethod('wave')" style="background:#1a56db22;border:2px solid #1a56db44;border-radius:16px;padding:16px 8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;font-family:'Space Grotesk',sans-serif;font-weight:900;font-size:13px;color:#7ab4ff;transition:all .2s;"><div style="font-size:32px;">🌊</div>Wave</button>
-          <button id="flowOMBtn" onclick="selFlowMethod('om')" style="background:#FF6B0022;border:2px solid #FF6B0044;border-radius:16px;padding:16px 8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;font-family:'Space Grotesk',sans-serif;font-weight:900;font-size:13px;color:#ffb380;transition:all .2s;"><div style="font-size:32px;">🟠</div>Orange Money</button>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><button class="btn btn-secondary" onclick="resetFlow()">← Retour</button><button class="btn btn-primary" id="btnPayTicket" onclick="goPayTicketWithPaytech()" disabled>Payer →</button></div>
-    </div>
-    <div id="ticketStep2" style="display:none;text-align:center;padding:30px 0;">
-      <div class="spinner" style="margin:0 auto 18px;"></div>
-      <div style="font-weight:800;font-size:15px;color:#aaa;">Connexion à PayTech…</div>
-      <div style="color:#666;font-size:12px;margin-top:8px;">Vous allez être redirigé…</div>
-    </div>
-    <div id="ticketStep3" style="display:none;">
-      <div style="font-weight:900;font-size:20px;margin-bottom:16px;">Étape 3 · En attente…</div>
-      <div style="background:#FFD10010;border:2px dashed var(--y);border-radius:18px;padding:24px;text-align:center;margin-bottom:18px;animation:pulse 2s ease-in-out infinite;"><div style="font-size:48px;margin-bottom:8px;">⏳</div><div style="font-weight:900;font-size:16px;color:var(--y);">En attente du receveur…</div><div style="color:#888;font-size:12px;margin-top:4px;">Le receveur valide en scannant votre QR Wallet</div></div>
-      <div class="ticket-thermal"><div class="t-header">== TRANSPAY = AFTU = CAPTRANS ==</div><div style="font-size:12px;line-height:1.9;">GIE:<span id="pv_gie">—</span> = <span id="pv_vehicle">—</span> = Ligne:<span id="pv_ligne">—</span><br>Trajet: <span id="pv_trajet">—</span><br>Section: <span id="pv_section">—</span> == Prix: <span id="pv_price">—</span> FCFA</div><div class="t-sn">Zone:<span id="pv_zone">—</span></div></div>
-    </div>
-  </div>
-</div>
-
-<script type="module">
-import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getAuth,createUserWithEmailAndPassword,signInWithEmailAndPassword,signOut,onAuthStateChanged}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import{getFirestore,doc,setDoc,getDoc,updateDoc,addDoc,collection,query,where,getDocs,onSnapshot,deleteDoc,increment,serverTimestamp,orderBy,limit}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-
-// ── CONFIG ──
-const BACKEND_URL = 'https://tatapay-backend-1.onrender.com';
-
-// ── Helper : appel sécurisé au backend (avec token Firebase) ──
-async function callBackend(path, body) {
-  const user = auth.currentUser;
-  if (!user) throw new Error('Session expirée — reconnectez-vous.');
-  const token = await user.getIdToken(/* forceRefresh */ true);
-  const resp = await fetch(`${BACKEND_URL}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + token
-    },
-    body: JSON.stringify(body)
-  });
-  let data;
-  try { data = await resp.json(); }
-  catch (e) { throw new Error('Réponse invalide du serveur (HTTP ' + resp.status + ')'); }
-  if (!resp.ok) throw new Error(data.error || ('Erreur serveur (HTTP ' + resp.status + ')'));
-  return data;
-}
-
-const FC={apiKey:"AIzaSyDeCSeZHu9-rsPYpwEJiVfbM0nX8cwD22o",authDomain:"tatapay-a4972.firebaseapp.com",projectId:"tatapay-a4972",storageBucket:"tatapay-a4972.firebasestorage.app",messagingSenderId:"198930634776",appId:"1:198930634776:web:265d82fbda0db1b09b0b6d"};
-const fbApp=initializeApp(FC);
-const auth=getAuth(fbApp);
-const db=getFirestore(fbApp);
-
-let S={role:null,uid:null,profile:null,authRole:'passenger',isReg:false,scMethod:null,ticketBus:null,ticketSection:null,camMode:null,stream:null,facing:'environment',scanning:false,friendTarget:null,flowPayMethod:null,wdAmt:0,rgAmt:0};
-let activeTicketData=null;
-let unsubPending=null,unsubNotif=null,unsubBalance=null,unsubRecvBalance=null;
-
-function loader(msg='',show=true){const l=document.getElementById('globalLoader');l.className=show?'show':'';if(msg)document.getElementById('loaderMsg').textContent=msg;}
-
-let ntTimer=null;
-function notify(icon,title,body){['sygostIcon','sygostTitle','sygostBody'].forEach((id,i)=>document.getElementById(id).textContent=[icon,title,body][i]);const el=document.getElementById('sygostNotif');el.classList.add('show');if(ntTimer)clearTimeout(ntTimer);ntTimer=setTimeout(hideSygost,4500);}
-window.hideSygost=()=>document.getElementById('sygostNotif').classList.remove('show');
-
-function renderQR(id,text,size=130){const el=document.getElementById(id);if(!el)return;el.innerHTML=`<img src="https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}&ecc=H&margin=10" width="${size}" height="${size}" style="border-radius:4px;display:block;"/>`;}
-function renderMerchantQR(id,p,size=160){
-  const el=document.getElementById(id);if(!el)return;
-  const data=`tatapay://bus/${p.walletId}?gie=${encodeURIComponent(p.gie)}&vehicle=${encodeURIComponent(p.vehicle)}&ligne=${encodeURIComponent(p.ligne)}&zone=${encodeURIComponent(p.zone)}`;
-  el.innerHTML=`<div style="background:#fff;border-radius:14px;padding:12px;display:inline-block;box-shadow:0 4px 18px #00000066;"><img src="https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data)}&ecc=H&margin=10" width="${size}" height="${size}" style="display:block;border-radius:4px;"/><div style="margin-top:8px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:9px;color:#333;font-weight:700;line-height:1.6;">GIE:${p.gie} · LIGNE ${p.ligne} · ZONE ${p.zone}<br>${p.vehicle} · AFTU/CAPTRANS<br><span style="color:#009A44;">${p.walletId}</span></div></div>`;}
-
-function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id)?.classList.add('active');}
-window.goSplash=()=>show('screenSplash');
-window.goAuth=(mode)=>{
-  S.isReg=mode==='register';
-  document.getElementById('authTitle').textContent=S.isReg?'Inscription':'Connexion';
-  document.getElementById('authSubmitBtn').textContent=S.isReg?'Créer mon compte':'Se connecter';
-  document.getElementById('authSwitchText').textContent=S.isReg?'Déjà inscrit ?':'Pas de compte ?';
-  document.getElementById('authSwitchLink').textContent=S.isReg?'Se connecter':"S'inscrire";
-  ['fieldName','fieldPhone','fieldPass2'].forEach(id=>document.getElementById(id).style.display=S.isReg?'block':'none');
-  document.getElementById('fieldsReceiver').style.display=(S.isReg&&S.authRole==='receiver')?'block':'none';
-  show('screenAuth');
-};
-window.toggleAuthMode=()=>window.goAuth(S.isReg?'login':'register');
-window.setRole=(r)=>{
-  S.authRole=r;
-  document.getElementById('tabPassenger').style.cssText=`background:${r==='passenger'?'var(--g)':'transparent'};color:${r==='passenger'?'var(--w)':'#888'};`;
-  document.getElementById('tabReceiver').style.cssText=`background:${r==='receiver'?'var(--orange)':'transparent'};color:${r==='receiver'?'var(--w)':'#888'};`;
-  document.getElementById('fieldsReceiver').style.display=(S.isReg&&r==='receiver')?'block':'none';
-};
-
-window.doAuth=async()=>{
-  const email=document.getElementById('authEmail').value.trim().toLowerCase();
-  const pass=document.getElementById('authPass').value;
-  if(!email||pass.length<6){notify('⚠️','Erreur','Email valide + mot de passe ≥ 6 caractères.');return;}
-  loader('Connexion…');
-  try{
-    if(S.isReg){
-      const name=document.getElementById('authName').value.trim();
-      if(!name){loader('',false);notify('⚠️','Champs','Entrez votre nom.');return;}
-      if(document.getElementById('authPass2').value!==pass){loader('',false);notify('⚠️','Erreur','Mots de passe différents.');return;}
-      const cred=await createUserWithEmailAndPassword(auth,email,pass);
-      const uid=cred.user.uid;
-      const walletId=S.authRole==='passenger'?'TP-'+uid.slice(0,6).toUpperCase():'RV-'+uid.slice(0,6).toUpperCase();
-      let profile={walletId,name,email,phone:document.getElementById('authPhone').value.trim(),role:S.authRole,balance:0,createdAt:serverTimestamp()};
-      if(S.authRole==='receiver'){
-        const gie=document.getElementById('authGIE').value.trim();
-        const vehicle=document.getElementById('authVehicle').value.trim();
-        const ligne=document.getElementById('authLigne').value.trim();
-        const zone=document.getElementById('authZone').value.trim().toUpperCase();
-        if(!gie||!vehicle||!ligne||!zone){loader('',false);notify('⚠️','Champs receveur','Remplissez GIE, Véhicule, Ligne, Zone.');return;}
-        Object.assign(profile,{gie,vehicle,ligne,zone,today:0,count:0});
-      }
-      await setDoc(doc(db,'users',uid),profile);
-      await setDoc(doc(db,'wallets',walletId),{uid,role:S.authRole});
-      loader('',false);
-    }else{
-      await signInWithEmailAndPassword(auth,email,pass);
-      loader('',false);
-    }
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
-
-window.doLogout=async()=>{
-  detachListeners();
-  await signOut(auth);
-  S={...S,role:null,uid:null,profile:null};
-  activeTicketData=null;
-  hideDescendBtn();
-  show('screenSplash');
-};
-
-onAuthStateChanged(auth,async user=>{
-  if(user){
-    loader('Chargement…');
-    try{
-      const snap=await getDoc(doc(db,'users',user.uid));
-      if(snap.exists()){S.uid=user.uid;S.profile=snap.data();S.role=S.profile.role;loginUI();}
-      else{loader('',false);await signOut(auth);}
-    }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-  }else{show('screenSplash');loader('',false);}
+// ── RATE LIMITING ──
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,                   // max 20 requêtes par IP
+  message: { error: 'Trop de requêtes, réessayez dans 15 minutes.' }
+});
+const ipnLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 50, // IPN peut être fréquent
+  message: { error: 'Trop de requêtes IPN' }
 });
 
-function detachListeners(){
-  if(unsubPending){unsubPending();unsubPending=null;}
-  if(unsubNotif){unsubNotif();unsubNotif=null;}
-  if(unsubBalance){unsubBalance();unsubBalance=null;}
-  if(unsubRecvBalance){unsubRecvBalance();unsubRecvBalance=null;}
-}
-
-function loginUI(){
-  const p=S.profile;
-  detachListeners();
-  if(S.role==='passenger'){
-    document.getElementById('passGreet').textContent=p.name.split(' ')[0];
-    document.getElementById('passWalletId').textContent=p.walletId;
-    document.getElementById('profileName').textContent=p.name;
-    document.getElementById('profileEmail').textContent=p.email;
-    renderQR('passQRWrap','tatapay://wallet/'+p.walletId,130);
-    renderQR('profileQRWrap','tatapay://wallet/'+p.walletId,200);
-    updateBalanceUI();clearFriend();
-    unsubBalance=onSnapshot(doc(db,'users',S.uid),snap=>{if(snap.exists()){S.profile.balance=snap.data().balance||0;updateBalanceUI();}});
-    loadPassHomeTx();loadPassTickets();
-    show('screenPassenger');notify('✅','Bienvenue !',p.name+' — '+p.walletId);
-  }else{
-    document.getElementById('recvGreet').textContent=p.name;
-    document.getElementById('recvInfoLine').textContent=`GIE:${p.gie} · Ligne ${p.ligne} · Zone ${p.zone}`;
-    renderMerchantQR('recvBusQRWrap',p,160);
-    refreshRecvStats();loadTrajets();loadRecvTickets();
-    attachPendingListener();attachNotifListener();
-    unsubRecvBalance=onSnapshot(doc(db,'users',S.uid),snap=>{
-      if(snap.exists()){S.profile.balance=snap.data().balance||0;const el=document.getElementById('recvBalance');if(el)el.textContent=(S.profile.balance).toLocaleString('fr-FR');}
-    });
-    show('screenReceiver');notify('✅','Connecté',p.name+' — '+p.vehicle);
+// ── MIDDLEWARE : VÉRIFICATION TOKEN FIREBASE ──
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Non autorisé — token manquant' });
   }
-  loader('',false);
-}
+  const token = authHeader.replace('Bearer ', '').trim();
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.uid = decoded.uid; // uid vérifié côté serveur
+    next();
+  } catch (e) {
+    console.error('❌ Token invalide:', e.message);
+    return res.status(401).json({ error: 'Token invalide ou expiré' });
+  }
+};
 
-function attachPendingListener(){
-  const q=query(collection(db,'pending'),where('busUid','==',S.uid));
-  unsubPending=onSnapshot(q,snap=>{
-    const items=snap.docs.map(d=>({id:d.id,...d.data()}));
-    renderPendingList(items);
-    document.getElementById('recvTicketCount').textContent=items.length||'0';
+// ── VALIDATION MONTANT ──
+const validateAmount = (amount) => {
+  const amt = parseInt(amount);
+  if (!amt || !Number.isInteger(amt)) return false;
+  if (amt < 100) return false;   // minimum 100 FCFA
+  if (amt > 500000) return false; // maximum 500 000 FCFA
+  return amt;
+};
+
+// ── ROUTE TEST ──
+app.get('/', (req, res) => {
+  res.json({ message: 'TataPay Backend is running!', paytech_env: PAYTECH_ENV });
+});
+
+// ── KEEP-ALIVE PING ──
+app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date() }));
+
+// ── INIT PAIEMENT PAYTECH ──
+app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
+  const { amount, phone, method, type, meta } = req.body;
+  const uid = req.uid; // uid vérifié par le middleware, pas celui du body
+
+  // Validation montant
+  const amt = validateAmount(amount);
+  if (!amt) {
+    return res.status(400).json({ error: 'Montant invalide (min 100, max 500 000 FCFA)' });
+  }
+
+  // Validation type
+  const allowedTypes = ['recharge', 'ticket', 'retrait'];
+  if (!allowedTypes.includes(type)) {
+    return res.status(400).json({ error: 'Type de paiement invalide' });
+  }
+
+  const refCommand = 'TTP-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+  await db.collection('paytech_transactions').doc(refCommand).set({
+    uid,
+    amount: amt,
+    type:      type,
+    method:    method || 'wave',
+    meta:      meta || null,
+    status:    'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
   });
-}
 
-function attachNotifListener(){
-  const q=query(collection(db,'notifications'),where('toUid','==',S.uid),where('read','==',false));
-  unsubNotif=onSnapshot(q,snap=>{
-    const n=snap.docs.length;
-    const badge=document.getElementById('bellBadge');
-    if(badge){badge.textContent=n;badge.className='bell-badge'+(n>0?' show':'');}
-    snap.docs.forEach(d=>{
-      const data=d.data();
-      showRecvToast(data.type,data);
-      updateDoc(doc(db,'notifications',d.id),{read:true});
+  const itemNames = {
+    recharge: 'Recharge TataPay',
+    ticket:   'Ticket TataPay',
+    retrait:  'Retrait TataPay'
+  };
+
+  const payload = {
+    item_name:       itemNames[type] || 'TataPay',
+    item_price:      amt,
+    currency:        'XOF',
+    ref_command:     refCommand,
+    command_name:    'TataPay Paiement',
+    env:             PAYTECH_ENV,
+    ipn_url:         'https://tatapay-backend-1.onrender.com/api/ipn',
+    success_url:     'https://tatapay-a4972.web.app/success.html',
+    cancel_url:      'https://tatapay-a4972.web.app/cancel.html',
+    sender_phone:    phone || '',
+    sender_country:  'SN',
+    channel:         method || 'wave',
+    custom_field:    JSON.stringify({ uid, type, ref: refCommand })
+  };
+
+  try {
+    const fetch = await import('node-fetch');
+    const response = await fetch.default('https://paytech.sn/api/payment/request-payment', {
+      method: 'POST',
+      headers: {
+        'API_KEY':      PAYTECH_API_KEY,
+        'API_SECRET':   PAYTECH_API_SECRET,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
     });
-  });
-}
 
-function playDescendreSound(){
-  try{const ctx=new(window.AudioContext||window.webkitAudioContext)();[[0,880,.18],[.2,1100,.18],[.4,1320,.28]].forEach(([s,f,d])=>{const o=ctx.createOscillator(),g=ctx.createGain();o.connect(g);g.connect(ctx.destination);o.frequency.value=f;o.type='sine';g.gain.setValueAtTime(0,ctx.currentTime+s);g.gain.linearRampToValueAtTime(.5,ctx.currentTime+s+.02);g.gain.linearRampToValueAtTime(0,ctx.currentTime+s+d);o.start(ctx.currentTime+s);o.stop(ctx.currentTime+s+d+.05);});}catch(e){}
-}
+    const rawText = await response.text();
+    console.log('🔍 Statut PayTech:', response.status, '| env:', PAYTECH_ENV);
+    console.log('🔍 Réponse PayTech:', rawText.slice(0, 500));
 
-function showRecvToast(type,data){
-  const stack=document.getElementById('recvToastStack');
-  const div=document.createElement('div');div.className='recv-toast';
-  let icon='🔔',title='Notification',body='',color='var(--orange)';
-  if(type==='descendre'){icon='🛑';title='Passager veut descendre !';body=`${data.passenger||'—'}\n${data.from||''}→${data.to||''}`;color='#DF0024';playDescendreSound();}
-  else if(type==='ticket_request'){icon='🎫';title='Nouvelle demande ticket';body=`${data.passenger||'—'} · ${data.price||0} FCFA`;}
-  div.innerHTML=`<button onclick="this.closest('.recv-toast').remove()" style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:14px;">✕</button><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;"><span style="font-size:18px;">${icon}</span><div style="font-weight:900;font-size:13px;color:${color};">${title}</div></div><div style="font-size:12px;color:#ccc;line-height:1.5;font-family:'JetBrains Mono',monospace;">${body}</div>`;
-  stack.appendChild(div);
-  const bell=document.getElementById('bellIcon');
-  if(bell){bell.classList.remove('bell-anim');void bell.offsetWidth;bell.classList.add('bell-anim');}
-  setTimeout(()=>{div.classList.add('out');setTimeout(()=>div.remove(),300);},type==='descendre'?8000:5000);
-}
-
-window.switchTab=(tab)=>{
-  document.querySelectorAll('#screenPassenger .tab-content').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('passTab-'+tab)?.classList.add('active');
-  document.getElementById('nav-'+tab)?.classList.add('active');
-  if(tab==='tickets')loadPassTickets();
-  if(tab==='history')loadPassHistory();
-};
-window.switchRecvTab=(tab)=>{
-  document.querySelectorAll('#screenReceiver .tab-content').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.recv-nav-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('recvTab-'+tab)?.classList.add('active');
-  document.getElementById('rnav-'+tab)?.classList.add('active');
-  if(tab==='trajets')loadTrajets();
-  if(tab==='tickets')loadRecvTickets();
-};
-
-window.openModal=(id)=>document.getElementById(id).style.display='flex';
-window.closeModal=(id)=>{document.getElementById(id).style.display='none';if(id==='modalTicketFlow')resetFlow();if(id==='modalWithdraw')resetWithdraw();if(id==='modalRecharge')resetRecharge();};
-
-function updateBalanceUI(){document.getElementById('passBalance').textContent=(S.profile?.balance||0).toLocaleString('fr-FR');}
-
-function showDescendBtn(t){activeTicketData=t;document.getElementById('descendInfo').textContent=`${t.from}→${t.to} · ${t.price} FCFA`;document.getElementById('descendBtn').style.display='block';document.getElementById('activeTicketBanner').style.display='block';document.getElementById('activeTicketLabel').textContent=`🚌 ${t.gie}/${t.vehicle} — ${t.from}→${t.to}`;}
-function hideDescendBtn(){document.getElementById('descendBtn').style.display='none';document.getElementById('activeTicketBanner').style.display='none';activeTicketData=null;}
-window.demandDescendre=async()=>{
-  if(!activeTicketData)return;
-  const t=activeTicketData;
-  await addDoc(collection(db,'notifications'),{toUid:t.busUid,type:'descendre',passenger:S.profile.name,from:t.from,to:t.to,read:false,ts:serverTimestamp()});
-  notify('🛑','Signal envoyé !','Le receveur a été prévenu.');
-  hideDescendBtn();
-};
-window.showActiveTicket=()=>{if(activeTicketData)showTicketData(activeTicketData);};
-
-// ============================================================
-// RETRAIT PAYTECH RÉEL
-// ============================================================
-window.openWithdraw=()=>{
-  resetWithdraw();
-  const bal=S.profile?.balance||0;
-  document.getElementById('withdrawAvailable').textContent=bal.toLocaleString('fr-FR')+' FCFA';
-  openModal('modalWithdraw');
-};
-function resetWithdraw(){
-  ['wdStep1','wdStep2','wdStep3'].forEach((id,i)=>{const el=document.getElementById(id);if(el)el.style.display=i===0?'block':'none';});
-  const wa=document.getElementById('wdAmt');if(wa)wa.value='';
-}
-window.wdGoStep2=()=>{
-  const amt=parseInt(document.getElementById('wdAmt').value||0);
-  const bal=S.profile?.balance||0;
-  if(!amt||amt<500){notify('⚠️','Montant','Minimum 500 FCFA.');return;}
-  if(amt>bal){notify('❌','Solde','Solde insuffisant ('+bal.toLocaleString('fr-FR')+' FCFA disponibles).');return;}
-  S.wdAmt=amt;
-  document.getElementById('wdAmtBig').textContent=amt.toLocaleString('fr-FR')+' FCFA';
-  document.getElementById('wdStep1').style.display='none';
-  document.getElementById('wdStep2').style.display='block';
-};
-window.wdBackStep1=()=>{document.getElementById('wdStep2').style.display='none';document.getElementById('wdStep1').style.display='block';};
-
-window.doWithdraw=async()=>{
-  const amt=S.wdAmt;if(!amt)return;
-  document.getElementById('wdStep2').style.display='none';
-  document.getElementById('wdStep3').style.display='block';
-  loader('Connexion à PayTech…');
-  try{
-    const data=await callBackend('/api/payment/init',{amount:amt,method:'wave',type:'retrait'});
-    loader('',false);
-    if(data.payment_url){
-      sessionStorage.setItem('tp_ref',data.ref_command);
-      sessionStorage.setItem('tp_type','retrait');
-      window.location.href=data.payment_url;
-    }else{
-      document.getElementById('wdStep3').style.display='none';
-      document.getElementById('wdStep2').style.display='block';
-      notify('❌','Erreur PayTech',data.error||'Impossible d\'initier le retrait');
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      return res.status(502).json({ error: 'Réponse non-JSON de PayTech', raw: rawText.slice(0, 500) });
     }
-  }catch(err){
-    loader('',false);
-    document.getElementById('wdStep3').style.display='none';
-    document.getElementById('wdStep2').style.display='block';
-    notify('❌','Erreur',err.message);
+
+    if (data.payment_url || data.redirect_url) {
+      const url = data.payment_url || data.redirect_url;
+      res.json({ payment_url: url, redirect_url: url, ref_command: refCommand });
+    } else {
+      await db.collection('paytech_transactions').doc(refCommand).delete();
+      res.status(500).json({ error: data.message || 'Erreur PayTech', details: data });
+    }
+
+  } catch (error) {
+    console.error('❌ Erreur init paiement:', error);
+    res.status(500).json({ error: error.message });
   }
-};
+});
 
-// ============================================================
-// RECHARGE PASSAGER PAR RECEVEUR — transfert interne
-// ============================================================
-window.openRecvCharge=()=>{
-  document.getElementById('rcWalletId').value='';
-  document.getElementById('rcAmt').value='';
-  document.getElementById('rcPassengerPreview').style.display='none';
-  document.getElementById('rcRecvBalance').textContent=(S.profile?.balance||0).toLocaleString('fr-FR')+' FCFA';
-  openModal('modalRecvCharge');
-};
-window.rcClearPreview=()=>{document.getElementById('rcPassengerPreview').style.display='none';};
-window.doRecvCharge=async()=>{
-  const walletId=document.getElementById('rcWalletId').value.trim().toUpperCase();
-  const amt=parseInt(document.getElementById('rcAmt').value);
-  if(!walletId){notify('⚠️','Wallet','Entrez ou scannez l\'ID wallet du passager.');return;}
-  if(!amt||amt<100){notify('⚠️','Montant','Montant minimum 100 FCFA.');return;}
-  const recvBal=S.profile?.balance||0;
-  if(amt>recvBal){notify('❌','Solde','Votre solde est insuffisant ('+recvBal.toLocaleString('fr-FR')+' FCFA).');return;}
-  loader('Recharge en cours…');
-  try{
-    const wSnap=await getDoc(doc(db,'wallets',walletId));
-    if(!wSnap.exists()){loader('',false);notify('❌','Introuvable','Wallet passager inconnu.');return;}
-    const paxUid=wSnap.data().uid;
-    if(paxUid===S.uid){loader('',false);notify('⚠️','Erreur','Impossible de vous recharger vous-même.');return;}
-    const pSnap=await getDoc(doc(db,'users',paxUid));
-    const pax=pSnap.data();
-    await updateDoc(doc(db,'users',S.uid),{balance:increment(-amt)});
-    await updateDoc(doc(db,'users',paxUid),{balance:increment(amt)});
-    await addDoc(collection(db,'users',S.uid,'history'),{type:'recharge_given',label:'Recharge → '+pax.name,amount:-amt,ts:serverTimestamp()});
-    await addDoc(collection(db,'users',paxUid,'history'),{type:'recharge',label:'Recharge par '+S.profile.name,amount:amt,ts:serverTimestamp()});
-    loader('',false);closeModal('modalRecvCharge');
-    notify('✅','Recharge effectuée',pax.name+' +'+amt.toLocaleString('fr-FR')+' FCFA');
-    refreshRecvStats();
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
+// ── IPN PAYTECH (sécurisé) ──
+app.post('/api/ipn', ipnLimiter, async (req, res) => {
+  console.log('📩 IPN reçu:', JSON.stringify({
+    type_event:  req.body.type_event,
+    ref_command: req.body.ref_command,
+    item_price:  req.body.item_price
+  }));
 
-// ============================================================
-// RECHARGE PAYTECH RÉEL — PASSAGER
-// ============================================================
-window.openRecharge=()=>{resetRecharge();openModal('modalRecharge');};
-function resetRecharge(){
-  ['rgStep1','rgStep2','rgStep3'].forEach((id,i)=>{const el=document.getElementById(id);if(el)el.style.display=i===0?'block':'none';});
-  const amt=document.getElementById('rechargeAmt');if(amt)amt.value='';
-  document.querySelectorAll('#modalRecharge .quick-btn').forEach(b=>b.classList.remove('sel'));
-}
-window.selQuickAmt=(v,btn)=>{document.getElementById('rechargeAmt').value=v;document.querySelectorAll('#modalRecharge .quick-btn').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');};
-window.rgGoStep2=()=>{
-  const v=parseInt(document.getElementById('rechargeAmt').value);
-  if(!v||v<100){notify('⚠️','Montant','Min 100 FCFA.');return;}
-  S.rgAmt=v;
-  document.getElementById('rgAmtBig').textContent=v.toLocaleString('fr-FR')+' FCFA';
-  document.getElementById('rgStep1').style.display='none';
-  document.getElementById('rgStep2').style.display='block';
-};
-window.rgBackStep1=()=>{document.getElementById('rgStep2').style.display='none';document.getElementById('rgStep1').style.display='block';};
+  try {
+    const {
+      type_event,
+      ref_command,
+      method,
+      api_key_sha256,
+      api_secret_sha256
+    } = req.body;
 
-window.rgPayWithPaytech=async()=>{
-  const amt=S.rgAmt;if(!amt)return;
-  document.getElementById('rgStep2').style.display='none';
-  document.getElementById('rgStep3').style.display='block';
-  loader('Connexion à PayTech…');
-  try{
-    const data=await callBackend('/api/payment/init',{amount:amt,method:'wave',type:'recharge'});
-    loader('',false);
-    if(data.payment_url){
-      sessionStorage.setItem('tp_ref',data.ref_command);
-      sessionStorage.setItem('tp_type','recharge');
-      window.location.href=data.payment_url;
-    }else{
-      document.getElementById('rgStep3').style.display='none';
-      document.getElementById('rgStep2').style.display='block';
-      notify('❌','Erreur PayTech',data.error||'Impossible d\'initier le paiement');
+    // ✅ Vérification signature PayTech
+    const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
+    const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
+
+    if (api_key_sha256 !== expectedKeyHash || api_secret_sha256 !== expectedSecretHash) {
+      console.error('❌ IPN non authentifié — signature invalide');
+      return res.status(403).send('Forbidden');
     }
-  }catch(err){
-    loader('',false);
-    document.getElementById('rgStep3').style.display='none';
-    document.getElementById('rgStep2').style.display='block';
-    notify('❌','Erreur',err.message);
-  }
-};
 
-// ============================================================
-// TRANSFERT ENTRE WALLETS
-// ============================================================
-window.openSend=()=>{clearFriend();document.getElementById('sendAmt').value='';openModal('modalSend');};
-window.clearFriend=()=>{S.friendTarget=null;document.getElementById('friendPreview').style.display='none';document.getElementById('friendManualWrap').style.display='block';document.getElementById('sendTarget').value='';};
-function setFriend(walletId,name){S.friendTarget={walletId,name};document.getElementById('friendName').textContent=name;document.getElementById('friendWalletId').textContent=walletId;document.getElementById('friendPreview').style.display='flex';document.getElementById('friendManualWrap').style.display='none';}
-window.doSend=async()=>{
-  const targetWid=S.friendTarget?.walletId||document.getElementById('sendTarget').value.trim().toUpperCase();
-  const amt=parseInt(document.getElementById('sendAmt').value);
-  if(!targetWid||!amt||amt<100){notify('⚠️','Formulaire','Remplissez les champs (min 100 FCFA).');return;}
-  if((S.profile.balance||0)<amt){notify('❌','Solde','Solde insuffisant.');return;}
-  if(targetWid===S.profile.walletId){notify('⚠️','Erreur','Impossible de vous envoyer à vous-même.');return;}
-  loader('Transfert…');
-  try{
-    const wSnap=await getDoc(doc(db,'wallets',targetWid));
-    if(!wSnap.exists()){loader('',false);notify('❌','Introuvable','Wallet destinataire inconnu.');return;}
-    const destUid=wSnap.data().uid;
-    const destSnap=await getDoc(doc(db,'users',destUid));
-    const dest=destSnap.data();
-    await updateDoc(doc(db,'users',S.uid),{balance:increment(-amt)});
-    await updateDoc(doc(db,'users',destUid),{balance:increment(amt)});
-    await addDoc(collection(db,'users',S.uid,'history'),{type:'transfer_out',label:'Transfert → '+dest.name,amount:-amt,ts:serverTimestamp()});
-    await addDoc(collection(db,'users',destUid,'history'),{type:'transfer_in',label:'Reçu de '+S.profile.name,amount:amt,ts:serverTimestamp()});
-    loader('',false);closeModal('modalSend');clearFriend();
-    notify('✅','Envoyé',amt.toLocaleString('fr-FR')+' FCFA → '+dest.name);
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
-
-// ============================================================
-// TRAJETS
-// ============================================================
-window.openAddTrajet=()=>{['trajetFrom','trajetTo','trajetSection','trajetPrice'].forEach(id=>document.getElementById(id).value='');openModal('modalAddTrajet');};
-window.doAddTrajet=async()=>{
-  const from=document.getElementById('trajetFrom').value.trim();
-  const to=document.getElementById('trajetTo').value.trim();
-  const section=parseInt(document.getElementById('trajetSection').value)||1;
-  const price=parseInt(document.getElementById('trajetPrice').value);
-  if(!from||!to||!price||price<50){notify('⚠️','Champs','Tous les champs sont requis (prix min 50 FCFA).');return;}
-  loader('Enregistrement…');
-  try{
-    await addDoc(collection(db,'users',S.uid,'destinations'),{from,to,section,price,createdAt:serverTimestamp()});
-    loader('',false);closeModal('modalAddTrajet');loadTrajets();
-    notify('✅','Trajet ajouté',`${from}→${to} · S${section} · ${price} FCFA`);
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
-window.delTrajet=async(id)=>{
-  try{await deleteDoc(doc(db,'users',S.uid,'destinations',id));loadTrajets();}
-  catch(e){notify('❌','Erreur',e.message);}
-};
-async function loadTrajets(){
-  if(S.role!=='receiver')return;
-  const snap=await getDocs(collection(db,'users',S.uid,'destinations'));
-  const cont=document.getElementById('trajetsList');
-  if(snap.empty){cont.innerHTML='<div style="text-align:center;padding:48px 20px;color:#555;">Aucune section. Cliquez + Ajouter.</div>';return;}
-  cont.innerHTML=snap.docs.map(d=>{const t=d.data();return`<div class="trajet-row"><div style="flex:1;"><div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;">${t.from}-->${t.to}</div><div style="color:#888;font-size:11px;margin-top:2px;">Section: ${t.section} == <strong style="color:var(--y);">${t.price} FCFA</strong></div></div><button onclick="delTrajet('${d.id}')" style="background:#DF002422;border:1px solid #DF002244;border-radius:10px;padding:8px;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff6b6b" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg></button></div>`;}).join('');
-}
-
-// ============================================================
-// TICKET FLOW — PAYTECH RÉEL
-// ============================================================
-window.openTicketFlow=()=>{resetFlow();openModal('modalTicketFlow');};
-window.resetFlow=()=>{
-  setDots(0);
-  ['ticketStep0','ticketStep1','ticketStep2','ticketStep3'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
-  document.getElementById('ticketStep0').style.display='block';
-  document.getElementById('payMethodWrap').style.display='none';
-  S.ticketBus=null;S.ticketSection=null;S.flowPayMethod=null;
-  document.getElementById('ticketPriceDisplay').textContent='— FCFA';
-  document.getElementById('btnPayTicket').disabled=true;
-};
-function setDots(s){for(let i=0;i<4;i++){const d=document.getElementById('tdot'+i);if(d)d.className='step-dot'+(i<s?' done':i===s?' active':'');}}
-
-window.selFlowMethod=(m)=>{
-  S.flowPayMethod=m;
-  const wB=document.getElementById('flowWaveBtn'),oB=document.getElementById('flowOMBtn');
-  wB.style.background=m==='wave'?'#1a56db55':'#1a56db22';wB.style.borderColor=m==='wave'?'#1a56db':'#1a56db44';
-  oB.style.background=m==='om'?'#FF6B0055':'#FF6B0022';oB.style.borderColor=m==='om'?'#FF6B00':'#FF6B0044';
-  document.getElementById('btnPayTicket').disabled=false;
-};
-
-async function loadBusInFlow(walletId){
-  loader('Chargement bus…');
-  try{
-    const wSnap=await getDoc(doc(db,'wallets',walletId));
-    if(!wSnap.exists()){loader('',false);notify('❌','Bus inconnu','QR non reconnu.');return;}
-    const recvUid=wSnap.data().uid;
-    const rSnap=await getDoc(doc(db,'users',recvUid));
-    if(!rSnap.exists()){loader('',false);notify('❌','Erreur','Receveur introuvable.');return;}
-    const recv={...rSnap.data(),uid:recvUid};
-    S.ticketBus=recv;S.ticketSection=null;
-    document.getElementById('detectedBusInfo').innerHTML=`GIE:${recv.gie} = ${recv.vehicle} = Ligne:${recv.ligne}<br>Zone:${recv.zone}`;
-    const destSnap=await getDocs(collection(db,'users',recvUid,'destinations'));
-    const destList=document.getElementById('destList');destList.innerHTML='';
-    if(destSnap.empty){destList.innerHTML='<div style="background:#FFD10015;border:1px solid #FFD10044;border-radius:12px;padding:12px;color:#888;font-size:13px;text-align:center;">Aucune section définie par ce receveur.</div>';}
-    else{
-      destSnap.docs.forEach(d=>{
-        const t=d.data();
-        const chip=document.createElement('div');
-        chip.style.cssText='background:#ffffff0d;border:1.5px solid #2a3a2a;border-radius:14px;padding:12px 14px;cursor:pointer;transition:all .2s;';
-        chip.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;"><div><div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;">${t.from}-->${t.to}</div><div style="color:#888;font-size:11px;">Section ${t.section}</div></div><div style="font-weight:900;font-size:18px;color:var(--y);">${t.price} F</div></div>`;
-        chip.onclick=()=>{S.ticketSection={...t,docId:d.id};destList.querySelectorAll('div[style]').forEach(c=>{c.style.background='#ffffff0d';c.style.borderColor='#2a3a2a';});chip.style.background='#00A65033';chip.style.borderColor='var(--g)';document.getElementById('ticketPriceDisplay').textContent=t.price.toLocaleString('fr-FR')+' FCFA';document.getElementById('payMethodWrap').style.display='block';S.flowPayMethod=null;document.getElementById('flowWaveBtn').style.cssText="background:#1a56db22;border:2px solid #1a56db44;border-radius:16px;padding:16px 8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;font-family:'Space Grotesk',sans-serif;font-weight:900;font-size:13px;color:#7ab4ff;transition:all .2s;";document.getElementById('flowOMBtn').style.cssText="background:#FF6B0022;border:2px solid #FF6B0044;border-radius:16px;padding:16px 8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;font-family:'Space Grotesk',sans-serif;font-weight:900;font-size:13px;color:#ffb380;transition:all .2s;";document.getElementById('btnPayTicket').disabled=true;};
-        destList.appendChild(chip);
-      });
+    if (type_event !== 'sale_complete') {
+      console.log('⏭️ Événement ignoré:', type_event);
+      return res.status(200).send('OK');
     }
-    loader('',false);
-    document.getElementById('ticketStep0').style.display='none';
-    document.getElementById('ticketStep1').style.display='block';
-    setDots(1);notify('🚌','Bus détecté',recv.vehicle+' · Ligne '+recv.ligne);
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-}
 
-// Bouton Payer → déclenche PayTech
-window.goPayTicketWithPaytech=async()=>{
-  if(!S.ticketSection){notify('⚠️','Section','Choisissez une destination.');return;}
-  if(!S.flowPayMethod){notify('⚠️','Paiement','Choisissez Wave ou Orange Money.');return;}
-  const sec=S.ticketSection;
-  const recv=S.ticketBus;
-  document.getElementById('ticketStep1').style.display='none';
-  document.getElementById('ticketStep2').style.display='block';
-  setDots(2);
-  loader('Connexion à PayTech…');
-  try{
-    const data=await callBackend('/api/payment/init',{
-      amount:sec.price,
-      method:S.flowPayMethod,
-      type:'ticket',
-      meta:{
-        busUid:recv.uid,busId:recv.walletId,
-        from:sec.from,to:sec.to,section:sec.section,
-        passengerId:S.profile.walletId,passengerName:S.profile.name,
-        gie:recv.gie,vehicle:recv.vehicle,ligne:recv.ligne,zone:recv.zone
+    const txRef = db.collection('paytech_transactions').doc(ref_command);
+
+    await db.runTransaction(async (t) => {
+      const txSnap = await t.get(txRef);
+
+      if (!txSnap.exists) {
+        console.error('❌ Transaction inconnue:', ref_command);
+        return;
       }
+      if (txSnap.data().status === 'credited') {
+        console.log('⚠️ Déjà crédité:', ref_command);
+        return;
+      }
+
+      const txData = txSnap.data();
+      const { uid, amount, type, meta } = txData;
+
+      if (!uid || !amount) {
+        console.error('❌ uid ou amount manquant');
+        return;
+      }
+
+      const userRef     = db.collection('users').doc(uid);
+      const histRef     = db.collection('users').doc(uid).collection('history').doc();
+      const finalMethod = method || txData.method || 'Mobile Money';
+
+      // ── CAS 1 : RECHARGE PASSAGER ──
+      if (type === 'recharge') {
+        t.update(userRef, { balance: admin.firestore.FieldValue.increment(amount) });
+        t.set(histRef, {
+          type: 'recharge',
+          label: `Recharge via ${finalMethod} — ${ref_command}`,
+          amount, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`✅ Recharge : ${uid} +${amount} FCFA`);
+      }
+
+      // ── CAS 2 : TICKET ──
+      else if (type === 'ticket' && meta) {
+        const pendingRef = db.collection('pending').doc();
+        t.set(pendingRef, {
+          busUid: meta.busUid, busId: meta.busId,
+          passengerUid: uid, passengerId: meta.passengerId,
+          passengerName: meta.passengerName,
+          from: meta.from, to: meta.to,
+          section: meta.section, price: amount,
+          method: finalMethod, gie: meta.gie,
+          vehicle: meta.vehicle, ligne: meta.ligne,
+          zone: meta.zone, ref: ref_command,
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
+          status: 'pending'
+        });
+        t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
+        t.set(histRef, {
+          type: 'ticket',
+          label: `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to}`,
+          amount: -amount, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`✅ Ticket : ${uid} -${amount} FCFA → receveur ${meta.busUid}`);
+      }
+
+      // ── CAS 3 : RETRAIT ──
+      else if (type === 'retrait') {
+        t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
+        t.set(histRef, {
+          type: 'withdraw',
+          label: `Retrait via ${finalMethod} — ${ref_command}`,
+          amount: -amount, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`✅ Retrait : ${uid} -${amount} FCFA`);
+      }
+
+      t.update(txRef, {
+        status: 'credited', method: finalMethod,
+        creditedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
     });
-    loader('',false);
-    if(data.payment_url){
-      sessionStorage.setItem('tp_ref',data.ref_command);
-      sessionStorage.setItem('tp_type','ticket');
-      window.location.href=data.payment_url;
-    }else{
-      document.getElementById('ticketStep2').style.display='none';
-      document.getElementById('ticketStep1').style.display='block';
-      setDots(1);
-      notify('❌','Erreur PayTech',data.error||'Impossible d\'initier le paiement');
+
+    res.status(200).send('OK');
+
+  } catch (err) {
+    console.error('❌ Erreur IPN:', err);
+    res.status(500).send('Erreur');
+  }
+});
+
+// ── GÉNÉRER QR SIGNÉ HORS-LIGNE ──
+app.post('/api/offline/qr', verifyToken, limiter, async (req, res) => {
+  const uid = req.uid;
+  try {
+    const userSnap = await db.collection('users').doc(uid).get();
+    if (!userSnap.exists) return res.status(404).json({ error: 'Utilisateur introuvable' });
+
+    const userData = userSnap.data();
+    const payload = {
+      uid,
+      walletId:  userData.walletId,
+      name:      userData.name,
+      balance:   userData.balance || 0,
+      issuedAt:  Date.now(),
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000
+    };
+
+    const signature = crypto
+      .createHmac('sha256', OFFLINE_SECRET)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    console.log(`✅ QR offline : ${uid} | solde: ${payload.balance} FCFA`);
+    res.json({ payload, signature });
+
+  } catch (err) {
+    console.error('❌ Erreur QR offline:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── VÉRIFIER QR HORS-LIGNE ──
+app.post('/api/offline/verify', async (req, res) => {
+  const { payload, signature } = req.body;
+  if (!payload || !signature) return res.status(400).json({ error: 'Données manquantes' });
+
+  try {
+    const expectedSig = crypto
+      .createHmac('sha256', OFFLINE_SECRET)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    const valid      = expectedSig === signature;
+    const expired    = Date.now() > payload.expiresAt;
+    const maxOffline = 1000;
+
+    res.json({ valid, expired, maxOffline });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SYNC TRANSACTIONS HORS-LIGNE ──
+app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
+  const { transactions } = req.body;
+  if (!transactions || !Array.isArray(transactions)) {
+    return res.status(400).json({ error: 'Tableau de transactions manquant' });
+  }
+
+  const results = [];
+
+  for (const tx of transactions) {
+    const { payload, signature, price, receiverUid, syncRef } = tx;
+
+    try {
+      // 1. Vérifier signature
+      const expectedSig = crypto
+        .createHmac('sha256', OFFLINE_SECRET)
+        .update(JSON.stringify(payload))
+        .digest('hex');
+
+      if (expectedSig !== signature) {
+        results.push({ syncRef, status: 'rejected', reason: 'Signature invalide' });
+        continue;
+      }
+
+      // 2. Expiration
+      if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) {
+        results.push({ syncRef, status: 'rejected', reason: 'QR expiré' });
+        continue;
+      }
+
+      // 3. Limite hors-ligne
+      if (price > 1000) {
+        results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA' });
+        continue;
+      }
+
+      // 4. Anti-double dépense
+      const existingSnap = await db.collection('offline_transactions').doc(syncRef).get();
+      if (existingSnap.exists) {
+        results.push({ syncRef, status: 'already_synced' });
+        continue;
+      }
+
+      // 5. Vérifier solde réel Firebase
+      const passengerRef  = db.collection('users').doc(payload.uid);
+      const passengerSnap = await passengerRef.get();
+      if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
+        results.push({ syncRef, status: 'rejected', reason: 'Solde insuffisant' });
+        continue;
+      }
+
+      // 6. Transaction atomique
+      const receiverRef = db.collection('users').doc(receiverUid);
+      const passHistRef = db.collection('users').doc(payload.uid).collection('history').doc();
+      const recvHistRef = db.collection('users').doc(receiverUid).collection('history').doc();
+
+      await db.runTransaction(async (t) => {
+        t.update(passengerRef, { balance: admin.firestore.FieldValue.increment(-price) });
+        t.set(passHistRef, {
+          type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`,
+          amount: -price, ref: syncRef,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(price) });
+        t.set(recvHistRef, {
+          type: 'collect_offline', label: `Collecte hors-ligne — ${syncRef}`,
+          amount: price, ref: syncRef,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        t.set(db.collection('offline_transactions').doc(syncRef), {
+          passengerUid: payload.uid, receiverUid, price, syncRef,
+          syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced'
+        });
+      });
+
+      results.push({ syncRef, status: 'synced' });
+      console.log(`✅ Sync offline : ${payload.uid} -${price} FCFA → ${receiverUid}`);
+
+    } catch (err) {
+      console.error(`❌ Erreur sync ${syncRef}:`, err.message);
+      results.push({ syncRef, status: 'error', reason: err.message });
     }
-  }catch(err){
-    loader('',false);
-    document.getElementById('ticketStep2').style.display='none';
-    document.getElementById('ticketStep1').style.display='block';
-    setDots(1);
-    notify('❌','Erreur',err.message);
   }
-};
 
-// ============================================================
-// SCANNER PASSAGER (receveur)
-// ============================================================
-let currentScanReq=null;
-window.showScanPanel=async(walletId)=>{
-  document.getElementById('scanPanelEl')?.remove();
-  loader('Recherche passager…');
-  try{
-    const wSnap=await getDoc(doc(db,'wallets',walletId));
-    if(!wSnap.exists()){loader('',false);notify('❌','Inconnu','Wallet passager introuvable.');return;}
-    const paxUid=wSnap.data().uid;
-    const paxSnap=await getDoc(doc(db,'users',paxUid));
-    const pax=paxSnap.data();
-    const q=query(collection(db,'pending'),where('passengerUid','==',paxUid),where('busUid','==',S.uid));
-    const pSnap=await getDocs(q);
-    currentScanReq=pSnap.empty?null:{id:pSnap.docs[0].id,...pSnap.docs[0].data(),paxUid};
-    loader('',false);
-    const div=document.createElement('div');div.id='scanPanelEl';
-    div.style.cssText='position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;z-index:600;padding:20px;background:#0c1f12;border-radius:24px 24px 0 0;border:1px solid #009A4422;animation:slideUp .3s ease;max-height:92vh;overflow-y:auto;';
-    if(currentScanReq){
-      const req=currentScanReq;
-      div.innerHTML=`<div style="background:#00A65015;border:2px solid #00A65044;border-radius:14px;padding:14px;margin-bottom:12px;"><div style="font-weight:900;font-size:15px;">${pax.name}</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#888;margin-top:4px;">${req.from}→${req.to} · S${req.section} · <strong style="color:var(--y);">${req.price} FCFA</strong></div></div><div style="font-weight:700;font-size:13px;color:#888;margin-bottom:8px;">Méthode de paiement :</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;"><button id="spWave" onclick="setScMethod('wave')" style="background:#1a56db22;border:2px solid #1a56db44;border-radius:12px;padding:10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:800;font-size:13px;color:#7ab4ff;">🌊 Wave</button><button id="spOM" onclick="setScMethod('om')" style="background:#FF6B0022;border:2px solid #FF6B0044;border-radius:12px;padding:10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:800;font-size:13px;color:#ffb380;">🟠 Orange Money</button></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><button onclick="rejectScan()" style="background:linear-gradient(135deg,var(--r),#B71C1C);border:none;border-radius:14px;padding:14px;color:#fff;font-weight:800;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:14px;">✗ Rejeter</button><button id="confirmScBtn" disabled onclick="confirmScan()" style="background:#ffffff15;border:none;border-radius:14px;padding:14px;color:#888;font-weight:800;cursor:not-allowed;font-family:'Space Grotesk',sans-serif;font-size:14px;">✅ Valider</button></div>`;
-    }else{
-      div.innerHTML=`<div style="background:#1a56db15;border:2px solid #1a56db44;border-radius:14px;padding:14px;margin-bottom:14px;display:flex;align-items:center;gap:12px;"><div style="width:44px;height:44px;border-radius:22px;background:linear-gradient(135deg,var(--g),var(--gd));display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;">🧍</div><div><div style="font-weight:900;font-size:15px;">${pax.name}</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#888;">${walletId}</div><div style="color:var(--y);font-weight:800;font-size:13px;margin-top:2px;">Solde : ${(pax.balance||0).toLocaleString('fr-FR')} FCFA</div></div></div><div style="font-weight:800;font-size:14px;margin-bottom:10px;">💰 Montant du trajet</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;"><button class="quick-btn" onclick="document.getElementById('manualAmt').value=150">150</button><button class="quick-btn" onclick="document.getElementById('manualAmt').value=200">200</button><button class="quick-btn" onclick="document.getElementById('manualAmt').value=300">300</button><button class="quick-btn" onclick="document.getElementById('manualAmt').value=500">500</button></div><input id="manualAmt" class="input-field" type="number" placeholder="Montant en FCFA" style="margin-bottom:12px;font-size:20px;font-weight:900;text-align:center;"/><div style="font-weight:700;font-size:13px;color:#888;margin-bottom:8px;">Méthode de paiement :</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;"><button id="manWave" onclick="selManualMethod('wave')" style="background:#1a56db22;border:2px solid #1a56db44;border-radius:12px;padding:10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:800;font-size:13px;color:#7ab4ff;transition:all .2s;">🌊 Wave</button><button id="manOM" onclick="selManualMethod('om')" style="background:#FF6B0022;border:2px solid #FF6B0044;border-radius:12px;padding:10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:800;font-size:13px;color:#ffb380;transition:all .2s;">🟠 Orange Money</button></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><button onclick="document.getElementById('scanPanelEl').remove()" style="background:#ffffff10;border:none;border-radius:14px;padding:14px;color:#888;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;cursor:pointer;">✕ Annuler</button><button id="manConfirmBtn" onclick="confirmManualScan('${paxUid}','${walletId}','${pax.name.replace(/'/g,'')}',${pax.balance||0})" style="background:linear-gradient(135deg,var(--g),var(--gd));border:none;border-radius:14px;padding:14px;color:#fff;font-weight:900;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:14px;">✅ Encaisser</button></div>`;
-    }
-    document.body.appendChild(div);
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
+  const synced   = results.filter(r => r.status === 'synced').length;
+  const rejected = results.filter(r => r.status === 'rejected').length;
+  console.log(`📊 Sync : ${synced} acceptées, ${rejected} rejetées`);
+  res.json({ results, synced, rejected });
+});
 
-let manualMethod=null;
-window.selManualMethod=(m)=>{
-  manualMethod=m;
-  const wB=document.getElementById('manWave'),oB=document.getElementById('manOM');
-  if(wB){wB.style.background=m==='wave'?'#1a56db55':'#1a56db22';wB.style.borderColor=m==='wave'?'#1a56db':'#1a56db44';}
-  if(oB){oB.style.background=m==='om'?'#FF6B0055':'#FF6B0022';oB.style.borderColor=m==='om'?'#FF6B00':'#FF6B0044';}
-};
+// ── DÉMARRAGE SERVEUR ──
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`✅ TataPay Backend démarré — port ${PORT} | env: ${PAYTECH_ENV}`);
+  console.log('🔒 Sécurité : CORS ✓ | Rate Limit ✓ | Token Firebase ✓ | Validation montant ✓');
 
-window.confirmManualScan=async(paxUid,walletId,passengerName,paxBalance)=>{
-  const amt=parseInt(document.getElementById('manualAmt')?.value||0);
-  if(!amt||amt<50){notify('⚠️','Montant','Entrez un montant valide (min 50 FCFA).');return;}
-  if(!manualMethod){notify('⚠️','Méthode','Choisissez Wave ou Orange Money.');return;}
-  if(paxBalance<amt){notify('❌','Solde insuffisant',`Le passager n'a que ${paxBalance.toLocaleString('fr-FR')} FCFA.`);return;}
-  loader('Encaissement…');
-  try{
-    const now=new Date();
-    const sn=`${walletId.replace('TP-','')}*M${Math.floor(1000+Math.random()*9000)}`;
-    const ticket={busId:S.profile.walletId,busUid:S.uid,gie:S.profile.gie,vehicle:S.profile.vehicle,ligne:S.profile.ligne,zone:S.profile.zone,from:'—',to:'—',section:0,price:amt,method:manualMethod,passengerId:walletId,passengerUid:paxUid,passenger:passengerName,date:now.toLocaleDateString('fr-FR'),time:now.toLocaleTimeString('fr-FR'),sn,ts:serverTimestamp()};
-    await updateDoc(doc(db,'users',paxUid),{balance:increment(-amt)});
-    await addDoc(collection(db,'users',paxUid,'history'),{type:'ticket',label:`Ticket ${S.profile.gie}/${S.profile.vehicle}`,amount:-amt,ts:serverTimestamp()});
-    await updateDoc(doc(db,'users',S.uid),{today:increment(amt),count:increment(1),balance:increment(amt)});
-    const tkRef=await addDoc(collection(db,'tickets'),ticket);
-    await addDoc(collection(db,'users',paxUid,'tickets'),{...ticket,ticketId:tkRef.id});
-    await addDoc(collection(db,'notifications'),{toUid:paxUid,type:'ticket_validated',passenger:passengerName,read:false,ts:serverTimestamp()});
-    manualMethod=null;
-    loader('',false);document.getElementById('scanPanelEl')?.remove();
-    refreshRecvStats();loadRecvTickets();
-    showTicketData({...ticket,id:tkRef.id});
-    notify('✅','Encaissé !',amt.toLocaleString('fr-FR')+' FCFA de '+passengerName);
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
-
-window.setScMethod=(m)=>{
-  S.scMethod=m;
-  const wB=document.getElementById('spWave'),oB=document.getElementById('spOM');
-  if(wB){wB.style.background=m==='wave'?'#1a56db55':'#1a56db22';wB.style.borderColor=m==='wave'?'#1a56db':'#1a56db44';}
-  if(oB){oB.style.background=m==='om'?'#FF6B0055':'#FF6B0022';oB.style.borderColor=m==='om'?'#FF6B00':'#FF6B0044';}
-  const btn=document.getElementById('confirmScBtn');
-  if(btn){btn.disabled=false;btn.style.cssText="background:linear-gradient(135deg,var(--g),var(--gd));border:none;border-radius:14px;padding:14px;color:#fff;font-weight:800;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:14px;";}
-};
-
-window.confirmScan=async()=>{
-  if(!currentScanReq||!S.scMethod){notify('⚠️','Méthode','Choisissez une méthode.');return;}
-  const req=currentScanReq;
-  loader('Validation ticket…');
-  try{
-    const paxSnap=await getDoc(doc(db,'users',req.paxUid));
-    const pax=paxSnap.data();
-    if((pax.balance||0)<req.price){loader('',false);notify('❌','Solde insuffisant','Le passager n\'a pas assez.');return;}
-    const now=new Date();
-    const sn=`${req.passengerId.replace('TP-','')}*R${Math.floor(1000+Math.random()*9000)}`;
-    const ticket={busId:S.profile.walletId,busUid:S.uid,gie:S.profile.gie,vehicle:S.profile.vehicle,ligne:S.profile.ligne,zone:S.profile.zone,from:req.from,to:req.to,section:req.section,price:req.price,method:S.scMethod,passengerId:req.passengerId,passengerUid:req.paxUid,passenger:req.passengerName,date:now.toLocaleDateString('fr-FR'),time:now.toLocaleTimeString('fr-FR'),sn,ts:serverTimestamp()};
-    await updateDoc(doc(db,'users',req.paxUid),{balance:increment(-req.price)});
-    await addDoc(collection(db,'users',req.paxUid,'history'),{type:'ticket',label:`Ticket ${S.profile.gie}/${S.profile.vehicle} → ${req.to}`,amount:-req.price,ts:serverTimestamp()});
-    await updateDoc(doc(db,'users',S.uid),{today:increment(req.price),count:increment(1),balance:increment(req.price)});
-    const tkRef=await addDoc(collection(db,'tickets'),ticket);
-    await addDoc(collection(db,'users',req.paxUid,'tickets'),{...ticket,ticketId:tkRef.id});
-    await deleteDoc(doc(db,'pending',req.id));
-    await addDoc(collection(db,'notifications'),{toUid:req.paxUid,type:'ticket_validated',passenger:req.passengerName,read:false,ts:serverTimestamp()});
-    loader('',false);document.getElementById('scanPanelEl')?.remove();
-    currentScanReq=null;S.scMethod=null;
-    refreshRecvStats();loadRecvTickets();
-    showTicketData({...ticket,id:tkRef.id});
-    notify('✅','Ticket validé !',req.price.toLocaleString('fr-FR')+' FCFA encaissés.');
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
-
-window.rejectScan=async()=>{
-  if(!currentScanReq)return;
-  await deleteDoc(doc(db,'pending',currentScanReq.id));
-  document.getElementById('scanPanelEl')?.remove();currentScanReq=null;S.scMethod=null;
-  notify('❌','Rejeté','Demande annulée.');
-};
-
-async function refreshRecvStats(){
-  if(S.role!=='receiver')return;
-  const snap=await getDoc(doc(db,'users',S.uid));
-  if(!snap.exists())return;
-  const u=snap.data();S.profile={...S.profile,...u};
-  document.getElementById('recvTotalToday').textContent=(u.today||0).toLocaleString('fr-FR')+' F';
-  document.getElementById('recvTicketCount').textContent=u.count||0;
-  const rb=document.getElementById('recvBalance');if(rb)rb.textContent=(u.balance||0).toLocaleString('fr-FR');
-}
-
-async function loadRecvTickets(){
-  const q=query(collection(db,'tickets'),where('busUid','==',S.uid),orderBy('ts','desc'),limit(50));
-  const snap=await getDocs(q);
-  const cont=document.getElementById('recvTicketsList');
-  if(snap.empty){cont.innerHTML='<div style="text-align:center;padding:48px 20px;color:#555;">Aucun ticket émis.</div>';return;}
-  cont.innerHTML=snap.docs.map(d=>{const t=d.data();return`<div onclick='showTicketData(${JSON.stringify({...t,id:d.id}).replace(/'/g,"&#39;")})' style="cursor:pointer;margin-bottom:14px;"><div class="ticket-thermal"><div class="t-header">== TRANSPAY = AFTU = CAPTRANS ==</div><div style="font-size:11px;line-height:1.9;">GIE:${t.gie} = ${t.vehicle} = Ligne:${t.ligne}<br>Trajet: ${t.from}-->${t.to}<br>Section: ${t.section} == Prix: ${t.price} FCFA<br>Date: ${t.date} ${t.time||''}</div><div class="t-sn">SN: ${t.sn} == Zone:${t.zone}</div></div></div>`;}).join('');
-}
-
-function renderPendingList(items){
-  const cont=document.getElementById('recvPending');
-  if(!items.length){cont.innerHTML='<div style="text-align:center;color:#555;padding:16px 0;font-size:13px;">Aucune demande en attente.</div>';return;}
-  cont.innerHTML=items.map(req=>{
-    const mIcon=req.method==='wave'?'🌊':'🟠';const mColor=req.method==='wave'?'#1a56db':'#FF6B00';const mLabel=req.method==='wave'?'Wave':'Orange Money';
-    return`<div style="background:#FFD10010;border:1px solid #FFD10044;border-radius:18px;padding:14px 16px;margin-bottom:12px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;"><div style="font-size:28px;">⏳</div><div style="flex:1;"><div style="font-weight:900;font-size:14px;">${req.passengerName||'Passager'}</div><div style="color:#888;font-size:11px;font-family:'JetBrains Mono',monospace;">${req.from}→${req.to} · S${req.section}</div><div style="display:inline-flex;align-items:center;gap:4px;background:${mColor}22;border:1px solid ${mColor}44;border-radius:8px;padding:2px 8px;margin-top:4px;"><span style="font-size:13px;">${mIcon}</span><span style="color:${mColor};font-weight:800;font-size:11px;">${mLabel}</span></div></div><div style="font-weight:900;font-size:18px;color:var(--y);">${req.price} F</div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"><button onclick="recvRejectTicket('${req.id}')" style="background:linear-gradient(135deg,#DF0024,#B71C1C);border:none;border-radius:12px;padding:12px;color:#fff;font-weight:900;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:13px;">✗ Annuler</button><button onclick="recvConfirmTicket('${req.id}','${req.passengerUid}','${req.passengerId}','${req.passengerName}','${req.from}','${req.to}','${req.section}',${req.price},'${req.method||'wave'}','${req.busUid||S.uid}')" style="background:linear-gradient(135deg,var(--g),var(--gd));border:none;border-radius:12px;padding:12px;color:#fff;font-weight:900;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:13px;">✅ Confirmer</button></div></div>`;
-  }).join('');
-}
-
-window.recvConfirmTicket=async(pendingId,paxUid,passengerId,passengerName,from,to,section,price,method)=>{
-  price=parseInt(price);section=parseInt(section);
-  loader('Validation ticket…');
-  try{
-    const paxSnap=await getDoc(doc(db,'users',paxUid));
-    const pax=paxSnap.data();
-    if((pax.balance||0)<price){loader('',false);notify('❌','Solde insuffisant','Le passager n\'a pas assez.');return;}
-    const now=new Date();
-    const sn=`${passengerId.replace('TP-','')}*R${Math.floor(1000+Math.random()*9000)}`;
-    const ticket={busId:S.profile.walletId,busUid:S.uid,gie:S.profile.gie,vehicle:S.profile.vehicle,ligne:S.profile.ligne,zone:S.profile.zone,from,to,section,price,method,passengerId,passengerUid:paxUid,passenger:passengerName,date:now.toLocaleDateString('fr-FR'),time:now.toLocaleTimeString('fr-FR'),sn,ts:serverTimestamp()};
-    await updateDoc(doc(db,'users',paxUid),{balance:increment(-price)});
-    await addDoc(collection(db,'users',paxUid,'history'),{type:'ticket',label:`Ticket ${S.profile.gie}/${S.profile.vehicle} → ${to}`,amount:-price,ts:serverTimestamp()});
-    await updateDoc(doc(db,'users',S.uid),{today:increment(price),count:increment(1),balance:increment(price)});
-    const tkRef=await addDoc(collection(db,'tickets'),ticket);
-    await addDoc(collection(db,'users',paxUid,'tickets'),{...ticket,ticketId:tkRef.id});
-    await deleteDoc(doc(db,'pending',pendingId));
-    await addDoc(collection(db,'notifications'),{toUid:paxUid,type:'ticket_validated',read:false,ts:serverTimestamp()});
-    loader('',false);refreshRecvStats();loadRecvTickets();
-    showTicketData({...ticket,id:tkRef.id});
-    notify('✅','Ticket validé !',price.toLocaleString('fr-FR')+' FCFA encaissés.');
-  }catch(e){loader('',false);notify('❌','Erreur',e.message);}
-};
-
-window.recvRejectTicket=async(pendingId)=>{
-  try{await deleteDoc(doc(db,'pending',pendingId));notify('❌','Annulé','Demande refusée.');}
-  catch(e){notify('❌','Erreur',e.message);}
-};
-
-async function loadPassHomeTx(){
-  if(S.role!=='passenger')return;
-  const q=query(collection(db,'users',S.uid,'history'),orderBy('ts','desc'),limit(4));
-  const snap=await getDocs(q);
-  const cont=document.getElementById('passHomeTx');
-  if(snap.empty){cont.innerHTML='<div style="color:#555;text-align:center;padding:16px 0;">Aucune transaction.</div>';return;}
-  cont.innerHTML=snap.docs.map(d=>txRow(d.data())).join('');
-}
-async function loadPassHistory(){
-  if(S.role!=='passenger')return;
-  const q=query(collection(db,'users',S.uid,'history'),orderBy('ts','desc'),limit(50));
-  const snap=await getDocs(q);
-  const cont=document.getElementById('passHistory');
-  if(snap.empty){cont.innerHTML='<div style="color:#555;text-align:center;padding:40px 0;">Aucune transaction.</div>';return;}
-  cont.innerHTML=snap.docs.map(d=>txRow(d.data())).join('');
-}
-function txRow(h){
-  const icons={recharge:'💳',transfer_out:'↗️',transfer_in:'↙️',ticket:'🎫',withdraw:'💸',recharge_given:'💳'};
-  const pos=h.amount>0;
-  return`<div class="tx-row"><div style="width:36px;height:36px;border-radius:12px;background:${pos?'#00A65022':'#DF002422'};display:flex;align-items:center;justify-content:center;font-size:16px;">${icons[h.type]||'💼'}</div><div style="flex:1;margin-left:4px;"><div style="font-weight:700;font-size:14px;">${h.label}</div></div><div style="color:${pos?'var(--g)':'var(--r)'};font-weight:800;font-size:14px;">${pos?'+':''}${(h.amount||0).toLocaleString('fr-FR')} F</div></div>`;
-}
-
-async function loadPassTickets(){
-  if(S.role!=='passenger')return;
-  const q=query(collection(db,'users',S.uid,'tickets'),orderBy('ts','desc'),limit(30));
-  const snap=await getDocs(q);
-  const cont=document.getElementById('passTicketsContainer');
-  if(snap.empty){cont.innerHTML='<div style="text-align:center;padding:48px 20px;"><div style="font-size:56px;opacity:.4;margin-bottom:16px;">🎫</div><div style="color:#555;font-weight:800;">Aucun ticket</div><button class="btn btn-purple" style="margin-top:16px;" onclick="openTicketFlow()">🎫 Acheter un ticket</button></div>';return;}
-  cont.innerHTML=snap.docs.map(d=>{const t=d.data();return`<div onclick='showTicketData(${JSON.stringify(t).replace(/'/g,"&#39;")})' style="cursor:pointer;margin-bottom:14px;"><div class="ticket-thermal"><div class="t-header">== TRANSPAY = AFTU = CAPTRANS ==</div><div style="font-size:12px;line-height:1.9;">GIE:${t.gie} = ${t.vehicle} = Ligne:${t.ligne}<br>Trajet: ${t.from}-->${t.to}<br>Section: ${t.section} == Prix: ${t.price} FCFA<br>Date: ${t.date} ${t.time||''}</div><div class="t-sn">SN: ${t.sn} == Zone:${t.zone}</div><div style="text-align:center;margin-top:6px;font-size:10px;color:#009A44;font-weight:800;">✅ Validé</div></div></div>`;}).join('');
-}
-
-window.showTicketData=(t)=>{
-  if(typeof t==='string')t=JSON.parse(t);
-  document.getElementById('ticketThermalContent').innerHTML=`<div class="t-header">== TRANSPAY = AFTU = CAPTRANS ==</div><div style="font-size:13px;line-height:2;">GIE:${t.gie} = ${t.vehicle} = Ligne:${t.ligne}<br>Trajet: ${t.from}-->${t.to}<br>Section: ${t.section} == Prix: ${t.price} FCFA<br>Date: ${t.date} ${t.time||''}</div><div class="t-sn">SN: ${t.sn} == Zone:${t.zone}</div><div style="margin-top:10px;text-align:center;font-size:11px;color:${t.method==='wave'?'#1a56db':'#FF6B00'};font-weight:800;">${t.method==='wave'?'🌊 Wave':'🟠 Orange Money'} · ${t.passenger} · ✅ Validé</div>`;
-  document.getElementById('ticketOverlay').style.display='flex';
-  if(S.role==='passenger')showDescendBtn(t);
-};
-window.closeTicket=()=>document.getElementById('ticketOverlay').style.display='none';
-
-window.openNotifPanel=async()=>{
-  const q=query(collection(db,'notifications'),where('toUid','==',S.uid),orderBy('ts','desc'),limit(20));
-  const snap=await getDocs(q);
-  const cont=document.getElementById('notifList');
-  if(snap.empty){cont.innerHTML='<div style="text-align:center;color:#555;padding:32px 0;">Aucune notification.</div>';}
-  else{cont.innerHTML=snap.docs.map(d=>{const n=d.data();let icon='🔔',title='Notification',body='',color='var(--orange)';if(n.type==='descendre'){icon='🛑';title='Passager veut descendre';body=`${n.passenger||'—'} · ${n.from||''}→${n.to||''}`;color='#DF0024';}else if(n.type==='ticket_request'){icon='🎫';title='Demande ticket';body=`${n.passenger||'—'} · ${n.price||0} FCFA`;color='var(--g)';}else if(n.type==='ticket_validated'){icon='✅';title='Ticket validé';body='Votre ticket a été validé !';color='var(--g)';}return`<div style="background:#ffffff08;border:1px solid ${color}33;border-radius:14px;padding:12px 14px;margin-bottom:10px;display:flex;align-items:flex-start;gap:10px;"><div style="font-size:22px;">${icon}</div><div><div style="font-weight:800;font-size:13px;color:${color};">${title}</div><div style="font-size:12px;color:#ccc;margin-top:3px;">${body}</div></div></div>`;}).join('');}
-  document.getElementById('notifPanel').style.display='flex';
-};
-window.clearNotifs=async()=>{
-  const q=query(collection(db,'notifications'),where('toUid','==',S.uid));
-  const snap=await getDocs(q);
-  await Promise.all(snap.docs.map(d=>deleteDoc(doc(db,'notifications',d.id))));
-  document.getElementById('notifList').innerHTML='<div style="text-align:center;color:#555;padding:32px 0;">Aucune notification.</div>';
-  const b=document.getElementById('bellBadge');if(b)b.className='bell-badge';
-};
-
-// ============================================================
-// CAMÉRA & QR
-// ============================================================
-let detector=null;
-if('BarcodeDetector' in window){try{detector=new BarcodeDetector({formats:['qr_code']});}catch(e){}}
-let scanCanvas=null,scanCtx=null;
-window.openCamera=async(mode)=>{
-  S.camMode=mode;S.scanning=false;
-  const labels={bus:'Scanner QR Bus',recv:'Scanner Passager',friend:'Scanner Ami 📷','wallet-scan':'Scanner Wallet'};
-  document.getElementById('camTitle').textContent=labels[mode]||'Scanner QR';
-  document.getElementById('camError').style.display='none';
-  document.getElementById('manualPanel')?.remove();
-  document.getElementById('cameraScreen').classList.add('open');
-  try{
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:S.facing},audio:false});
-    S.stream=stream;const video=document.getElementById('cameraVideo');video.srcObject=stream;await video.play();
-    if(!scanCanvas){scanCanvas=document.createElement('canvas');scanCtx=scanCanvas.getContext('2d',{willReadFrequently:true});}
-    S.scanning=true;scanLoop();
-  }catch(e){
-    let msg='Caméra inaccessible.';
-    if(e.name==='NotAllowedError')msg='Permission caméra refusée.';
-    document.getElementById('camError').style.display='block';
-    document.getElementById('camError').textContent='⚠️ '+msg;
-    showManualPanel();
-  }
-};
-function showManualPanel(){
-  document.getElementById('manualPanel')?.remove();
-  const div=Object.assign(document.createElement('div'),{id:'manualPanel'});
-  div.style.cssText='position:absolute;left:0;right:0;bottom:90px;padding:0 20px;pointer-events:all;';
-  div.innerHTML=`<div style="background:#0c1f12;border:1px solid #009A4444;border-radius:14px;padding:14px;"><div style="color:#aaa;font-size:12px;margin-bottom:8px;">Entrez l'ID (TP-XXXXXX ou RV-XXXXXX) :</div><input id="manualQrInput" class="input-field" placeholder="TP-... ou RV-..."/><button class="btn btn-primary btn-full" style="margin-top:10px;" onclick="submitManual()">Valider</button></div>`;
-  document.querySelector('#cameraScreen .camera-overlay').appendChild(div);
-}
-window.submitManual=()=>{const v=document.getElementById('manualQrInput')?.value.trim();if(v)handleQR(v);};
-function scanLoop(){
-  if(!S.scanning)return;
-  const video=document.getElementById('cameraVideo');
-  if(video.readyState!==video.HAVE_ENOUGH_DATA){requestAnimationFrame(scanLoop);return;}
-  if(detector){detector.detect(video).then(codes=>{if(codes?.length){handleQR(codes[0].rawValue);return;}scanWithJsQR(video);}).catch(()=>scanWithJsQR(video));}
-  else{scanWithJsQR(video);}
-}
-function scanWithJsQR(video){
-  if(!S.scanning)return;
-  if(typeof jsQR==='function'){
-    const w=video.videoWidth,h=video.videoHeight;
-    if(w&&h){scanCanvas.width=w;scanCanvas.height=h;scanCtx.drawImage(video,0,0,w,h);try{const img=scanCtx.getImageData(0,0,w,h);const code=jsQR(img.data,w,h,{inversionAttempts:'dontInvert'});if(code?.data){handleQR(code.data);return;}}catch(e){}}
-  }
-  requestAnimationFrame(scanLoop);
-}
-window.stopCamera=()=>{S.scanning=false;document.getElementById('cameraScreen').classList.remove('open');document.getElementById('manualPanel')?.remove();if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null;}};
-window.flipCamera=async()=>{S.facing=S.facing==='environment'?'user':'environment';if(S.stream)S.stream.getTracks().forEach(t=>t.stop());await window.openCamera(S.camMode);};
-
-function handleQR(raw){
-  stopCamera();raw=(raw||'').trim();
-  const walletM=raw.match(/tatapay:\/\/wallet\/([A-Za-z0-9-]+)/i);
-  const busM=raw.match(/tatapay:\/\/bus\/([A-Za-z0-9-]+)/i);
-  const walletId=walletM?walletM[1]:(/^TP-/i.test(raw)?raw.toUpperCase():null);
-  const busId=busM?busM[1]:(/^RV-/i.test(raw)?raw.toUpperCase():null);
-  if(S.camMode==='bus'){if(!busId){notify('❌','QR invalide','Ce n\'est pas un QR marchand.');return;}if(document.getElementById('modalTicketFlow').style.display!=='flex')openTicketFlow();setTimeout(()=>loadBusInFlow(busId),100);}
-  else if(S.camMode==='recv'){if(!walletId){notify('❌','QR invalide','Ce n\'est pas un wallet passager.');return;}window.showScanPanel(walletId);}
-  else if(S.camMode==='wallet-scan'){
-    if(!walletId){notify('❌','QR invalide','Wallet introuvable.');return;}
-    document.getElementById('rcWalletId').value=walletId;
-    openModal('modalRecvCharge');
-    notify('📷','Wallet scanné',walletId);
-  }
-  else if(S.camMode==='friend'){if(!walletId){notify('❌','QR invalide','Ce n\'est pas un wallet TataPay.');return;}if(walletId===S.profile?.walletId){notify('⚠️','Erreur','C\'est votre propre wallet !');return;}setFriend(walletId,walletId);openModal('modalSend');notify('📷','Ami scanné',walletId);}
-}
-
-// Modal Ajouter Trajet (manquait dans le HTML — on l'ajoute dynamiquement)
-const trajetModal=document.createElement('div');
-trajetModal.className='modal-overlay';trajetModal.id='modalAddTrajet';trajetModal.style.display='none';
-trajetModal.onclick=function(e){if(e.target===this)closeModal('modalAddTrajet');};
-trajetModal.innerHTML=`<div class="modal-box" onclick="event.stopPropagation()"><div style="height:3px;background:linear-gradient(90deg,#009A44 33%,#FDEF42 33% 66%,#DF0024 66%);border-radius:24px 24px 0 0;"></div><div class="modal-header"><div style="font-weight:900;font-size:18px;">📍 Ajouter une Section</div><button class="modal-close" onclick="closeModal('modalAddTrajet')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="input-wrap"><label class="input-label">Départ *</label><input class="input-field" id="trajetFrom" placeholder="ex: Guedlawaye"/></div><div class="input-wrap"><label class="input-label">Arrivée *</label><input class="input-field" id="trajetTo" placeholder="ex: Kounoune"/></div><div class="input-wrap"><label class="input-label">N° Section *</label><input class="input-field" id="trajetSection" type="number" placeholder="1"/></div><div class="input-wrap"><label class="input-label">Prix (FCFA) *</label><input class="input-field" id="trajetPrice" type="number" placeholder="150"/></div><div class="quick-grid"><button class="quick-btn" onclick="document.getElementById('trajetPrice').value=150">150</button><button class="quick-btn" onclick="document.getElementById('trajetPrice').value=200">200</button><button class="quick-btn" onclick="document.getElementById('trajetPrice').value=300">300</button><button class="quick-btn" onclick="document.getElementById('trajetPrice').value=500">500</button></div><button class="btn btn-primary btn-full" onclick="doAddTrajet()">Ajouter ✓</button></div></div>`;
-document.getElementById('app').appendChild(trajetModal);
-</script>
-</div>
-</body>
-</html>
+  // Keep-alive toutes les 9 minutes
+  setInterval(() => {
+    https.get('https://tatapay-backend-1.onrender.com/ping', () => {})
+         .on('error', () => {});
+  }, 9 * 60 * 1000);
+  console.log('🔁 Keep-alive activé — ping toutes les 9 minutes');
+});
