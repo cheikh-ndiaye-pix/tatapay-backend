@@ -7,14 +7,26 @@ const rateLimit = require('express-rate-limit');
 const app       = express();
 
 // ── CORS SÉCURISÉ ──
+const allowedOrigins = [
+  'https://tatapay-a4972.web.app',
+  'https://tatapay-a4972.firebaseapp.com',
+  'https://steady-eclair-770c6e.netlify.app',
+  'http://localhost:8081',
+  'http://localhost:19006',
+];
 app.use(cors({
-  origin: [
-    'https://tatapay-a4972.web.app',
-    'https://tatapay-a4972.firebaseapp.com',
-    'http://localhost:8081',
-    'http://localhost:19006',
-    'exp://192.168.1.91:8081'
-  ]
+  origin: function(origin, callback) {
+    // Autoriser si pas d'origin (app mobile native iOS/Android)
+    if (!origin) return callback(null, true);
+    // Autoriser Expo Go (exp://...)
+    if (origin.startsWith('exp://')) return callback(null, true);
+    // Autoriser les origines connues
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Bloquer tout le reste
+    console.warn('🚫 CORS bloqué pour:', origin);
+    return callback(new Error('CORS non autorisé : ' + origin));
+  },
+  credentials: true
 }));
 
 app.use(express.json());
@@ -33,13 +45,13 @@ const db = admin.firestore();
 
 // ── RATE LIMITING ──
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,                   // max 20 requêtes par IP
+  windowMs: 15 * 60 * 1000,
+  max: 20,
   message: { error: 'Trop de requêtes, réessayez dans 15 minutes.' }
 });
 const ipnLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 50, // IPN peut être fréquent
+  max: 50,
   message: { error: 'Trop de requêtes IPN' }
 });
 
@@ -52,7 +64,7 @@ const verifyToken = async (req, res, next) => {
   const token = authHeader.replace('Bearer ', '').trim();
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    req.uid = decoded.uid; // uid vérifié côté serveur
+    req.uid = decoded.uid;
     next();
   } catch (e) {
     console.error('❌ Token invalide:', e.message);
@@ -64,8 +76,8 @@ const verifyToken = async (req, res, next) => {
 const validateAmount = (amount) => {
   const amt = parseInt(amount);
   if (!amt || !Number.isInteger(amt)) return false;
-  if (amt < 100) return false;   // minimum 100 FCFA
-  if (amt > 500000) return false; // maximum 500 000 FCFA
+  if (amt < 100) return false;
+  if (amt > 500000) return false;
   return amt;
 };
 
@@ -80,15 +92,13 @@ app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date() }));
 // ── INIT PAIEMENT PAYTECH ──
 app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
   const { amount, phone, method, type, meta } = req.body;
-  const uid = req.uid; // uid vérifié par le middleware, pas celui du body
+  const uid = req.uid;
 
-  // Validation montant
   const amt = validateAmount(amount);
   if (!amt) {
     return res.status(400).json({ error: 'Montant invalide (min 100, max 500 000 FCFA)' });
   }
 
-  // Validation type
   const allowedTypes = ['recharge', 'ticket', 'retrait'];
   if (!allowedTypes.includes(type)) {
     return res.status(400).json({ error: 'Type de paiement invalide' });
@@ -174,15 +184,8 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
   }));
 
   try {
-    const {
-      type_event,
-      ref_command,
-      method,
-      api_key_sha256,
-      api_secret_sha256
-    } = req.body;
+    const { type_event, ref_command, method, api_key_sha256, api_secret_sha256 } = req.body;
 
-    // ✅ Vérification signature PayTech
     const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
     const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
 
@@ -201,84 +204,37 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
     await db.runTransaction(async (t) => {
       const txSnap = await t.get(txRef);
 
-      if (!txSnap.exists) {
-        console.error('❌ Transaction inconnue:', ref_command);
-        return;
-      }
-      if (txSnap.data().status === 'credited') {
-        console.log('⚠️ Déjà crédité:', ref_command);
-        return;
-      }
+      if (!txSnap.exists) { console.error('❌ Transaction inconnue:', ref_command); return; }
+      if (txSnap.data().status === 'credited') { console.log('⚠️ Déjà crédité:', ref_command); return; }
 
       const txData = txSnap.data();
       const { uid, amount, type, meta } = txData;
-
-      if (!uid || !amount) {
-        console.error('❌ uid ou amount manquant');
-        return;
-      }
+      if (!uid || !amount) { console.error('❌ uid ou amount manquant'); return; }
 
       const userRef     = db.collection('users').doc(uid);
       const histRef     = db.collection('users').doc(uid).collection('history').doc();
       const finalMethod = method || txData.method || 'Mobile Money';
 
-      // ── CAS 1 : RECHARGE PASSAGER ──
       if (type === 'recharge') {
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(amount) });
-        t.set(histRef, {
-          type: 'recharge',
-          label: `Recharge via ${finalMethod} — ${ref_command}`,
-          amount, ref: ref_command,
-          ts: admin.firestore.FieldValue.serverTimestamp()
-        });
+        t.set(histRef, { type: 'recharge', label: `Recharge via ${finalMethod} — ${ref_command}`, amount, ref: ref_command, ts: admin.firestore.FieldValue.serverTimestamp() });
         console.log(`✅ Recharge : ${uid} +${amount} FCFA`);
-      }
-
-      // ── CAS 2 : TICKET ──
-      else if (type === 'ticket' && meta) {
+      } else if (type === 'ticket' && meta) {
         const pendingRef = db.collection('pending').doc();
-        t.set(pendingRef, {
-          busUid: meta.busUid, busId: meta.busId,
-          passengerUid: uid, passengerId: meta.passengerId,
-          passengerName: meta.passengerName,
-          from: meta.from, to: meta.to,
-          section: meta.section, price: amount,
-          method: finalMethod, gie: meta.gie,
-          vehicle: meta.vehicle, ligne: meta.ligne,
-          zone: meta.zone, ref: ref_command,
-          paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          status: 'pending'
-        });
+        t.set(pendingRef, { busUid: meta.busUid, busId: meta.busId, passengerUid: uid, passengerId: meta.passengerId, passengerName: meta.passengerName, from: meta.from, to: meta.to, section: meta.section, price: amount, method: finalMethod, gie: meta.gie, vehicle: meta.vehicle, ligne: meta.ligne, zone: meta.zone, ref: ref_command, paidAt: admin.firestore.FieldValue.serverTimestamp(), status: 'pending' });
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
-        t.set(histRef, {
-          type: 'ticket',
-          label: `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to}`,
-          amount: -amount, ref: ref_command,
-          ts: admin.firestore.FieldValue.serverTimestamp()
-        });
+        t.set(histRef, { type: 'ticket', label: `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to}`, amount: -amount, ref: ref_command, ts: admin.firestore.FieldValue.serverTimestamp() });
         console.log(`✅ Ticket : ${uid} -${amount} FCFA → receveur ${meta.busUid}`);
-      }
-
-      // ── CAS 3 : RETRAIT ──
-      else if (type === 'retrait') {
+      } else if (type === 'retrait') {
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
-        t.set(histRef, {
-          type: 'withdraw',
-          label: `Retrait via ${finalMethod} — ${ref_command}`,
-          amount: -amount, ref: ref_command,
-          ts: admin.firestore.FieldValue.serverTimestamp()
-        });
+        t.set(histRef, { type: 'withdraw', label: `Retrait via ${finalMethod} — ${ref_command}`, amount: -amount, ref: ref_command, ts: admin.firestore.FieldValue.serverTimestamp() });
         console.log(`✅ Retrait : ${uid} -${amount} FCFA`);
       }
 
-      t.update(txRef, {
-        status: 'credited', method: finalMethod,
-        creditedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+      t.update(txRef, { status: 'credited', method: finalMethod, creditedAt: admin.firestore.FieldValue.serverTimestamp() });
     });
 
     res.status(200).send('OK');
-
   } catch (err) {
     console.error('❌ Erreur IPN:', err);
     res.status(500).send('Erreur');
@@ -302,14 +258,9 @@ app.post('/api/offline/qr', verifyToken, limiter, async (req, res) => {
       expiresAt: Date.now() + 24 * 60 * 60 * 1000
     };
 
-    const signature = crypto
-      .createHmac('sha256', OFFLINE_SECRET)
-      .update(JSON.stringify(payload))
-      .digest('hex');
-
+    const signature = crypto.createHmac('sha256', OFFLINE_SECRET).update(JSON.stringify(payload)).digest('hex');
     console.log(`✅ QR offline : ${uid} | solde: ${payload.balance} FCFA`);
     res.json({ payload, signature });
-
   } catch (err) {
     console.error('❌ Erreur QR offline:', err);
     res.status(500).json({ error: err.message });
@@ -322,15 +273,10 @@ app.post('/api/offline/verify', async (req, res) => {
   if (!payload || !signature) return res.status(400).json({ error: 'Données manquantes' });
 
   try {
-    const expectedSig = crypto
-      .createHmac('sha256', OFFLINE_SECRET)
-      .update(JSON.stringify(payload))
-      .digest('hex');
-
+    const expectedSig = crypto.createHmac('sha256', OFFLINE_SECRET).update(JSON.stringify(payload)).digest('hex');
     const valid      = expectedSig === signature;
     const expired    = Date.now() > payload.expiresAt;
     const maxOffline = 1000;
-
     res.json({ valid, expired, maxOffline });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -348,73 +294,35 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
 
   for (const tx of transactions) {
     const { payload, signature, price, receiverUid, syncRef } = tx;
-
     try {
-      // 1. Vérifier signature
-      const expectedSig = crypto
-        .createHmac('sha256', OFFLINE_SECRET)
-        .update(JSON.stringify(payload))
-        .digest('hex');
+      const expectedSig = crypto.createHmac('sha256', OFFLINE_SECRET).update(JSON.stringify(payload)).digest('hex');
+      if (expectedSig !== signature) { results.push({ syncRef, status: 'rejected', reason: 'Signature invalide' }); continue; }
+      if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) { results.push({ syncRef, status: 'rejected', reason: 'QR expiré' }); continue; }
+      if (price > 1000) { results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA' }); continue; }
 
-      if (expectedSig !== signature) {
-        results.push({ syncRef, status: 'rejected', reason: 'Signature invalide' });
-        continue;
-      }
-
-      // 2. Expiration
-      if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) {
-        results.push({ syncRef, status: 'rejected', reason: 'QR expiré' });
-        continue;
-      }
-
-      // 3. Limite hors-ligne
-      if (price > 1000) {
-        results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA' });
-        continue;
-      }
-
-      // 4. Anti-double dépense
       const existingSnap = await db.collection('offline_transactions').doc(syncRef).get();
-      if (existingSnap.exists) {
-        results.push({ syncRef, status: 'already_synced' });
-        continue;
-      }
+      if (existingSnap.exists) { results.push({ syncRef, status: 'already_synced' }); continue; }
 
-      // 5. Vérifier solde réel Firebase
       const passengerRef  = db.collection('users').doc(payload.uid);
       const passengerSnap = await passengerRef.get();
       if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
-        results.push({ syncRef, status: 'rejected', reason: 'Solde insuffisant' });
-        continue;
+        results.push({ syncRef, status: 'rejected', reason: 'Solde insuffisant' }); continue;
       }
 
-      // 6. Transaction atomique
       const receiverRef = db.collection('users').doc(receiverUid);
       const passHistRef = db.collection('users').doc(payload.uid).collection('history').doc();
       const recvHistRef = db.collection('users').doc(receiverUid).collection('history').doc();
 
       await db.runTransaction(async (t) => {
         t.update(passengerRef, { balance: admin.firestore.FieldValue.increment(-price) });
-        t.set(passHistRef, {
-          type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`,
-          amount: -price, ref: syncRef,
-          ts: admin.firestore.FieldValue.serverTimestamp()
-        });
+        t.set(passHistRef, { type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`, amount: -price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp() });
         t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(price) });
-        t.set(recvHistRef, {
-          type: 'collect_offline', label: `Collecte hors-ligne — ${syncRef}`,
-          amount: price, ref: syncRef,
-          ts: admin.firestore.FieldValue.serverTimestamp()
-        });
-        t.set(db.collection('offline_transactions').doc(syncRef), {
-          passengerUid: payload.uid, receiverUid, price, syncRef,
-          syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced'
-        });
+        t.set(recvHistRef, { type: 'collect_offline', label: `Collecte hors-ligne — ${syncRef}`, amount: price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp() });
+        t.set(db.collection('offline_transactions').doc(syncRef), { passengerUid: payload.uid, receiverUid, price, syncRef, syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced' });
       });
 
       results.push({ syncRef, status: 'synced' });
       console.log(`✅ Sync offline : ${payload.uid} -${price} FCFA → ${receiverUid}`);
-
     } catch (err) {
       console.error(`❌ Erreur sync ${syncRef}:`, err.message);
       results.push({ syncRef, status: 'error', reason: err.message });
@@ -433,10 +341,8 @@ app.listen(PORT, () => {
   console.log(`✅ TataPay Backend démarré — port ${PORT} | env: ${PAYTECH_ENV}`);
   console.log('🔒 Sécurité : CORS ✓ | Rate Limit ✓ | Token Firebase ✓ | Validation montant ✓');
 
-  // Keep-alive toutes les 9 minutes
   setInterval(() => {
-    https.get('https://tatapay-backend-1.onrender.com/ping', () => {})
-         .on('error', () => {});
+    https.get('https://tatapay-backend-1.onrender.com/ping', () => {}).on('error', () => {});
   }, 9 * 60 * 1000);
   console.log('🔁 Keep-alive activé — ping toutes les 9 minutes');
 });
