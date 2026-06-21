@@ -16,6 +16,7 @@ const allowedOrigins = [
   'https://endearing-sorbet-5fbf83.netlify.app',
   'https://lit-biscochitos-65169b.netlify.app',
   'https://jazzy-mousse-21e534.netlify.app',
+  'https://tatapay-frontend.vercel.app',
   'http://localhost:8081',
   'http://localhost:19006',
   'exp://192.168.1.91:8081'
@@ -123,8 +124,8 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
     command_name:   'TataPay Paiement',
     env:            PAYTECH_ENV,
     ipn_url:        'https://tatapay-backend-1.onrender.com/api/ipn',
-    success_url:    'https://jazzy-mousse-21e534.netlify.app/success.html',
-    cancel_url:     'https://jazzy-mousse-21e534.netlify.app/cancel.html',
+    success_url:    'https://tatapay-frontend.vercel.app/success.html',
+    cancel_url:     'https://tatapay-frontend.vercel.app/cancel.html',
     sender_phone:   phone || '',
     sender_country: 'SN',
     channel:        method || 'wave',
