@@ -25,6 +25,7 @@ const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY    || '').trim();
 const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
 const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
 const OFFLINE_SECRET     = (process.env.OFFLINE_SECRET || 'tatapay-offline-secret-2026').trim();
+const ADMIN_UID          = (process.env.ADMIN_UID || '').trim(); // UID Firebase de l'administrateur
 
 // ── FIREBASE ──
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -33,13 +34,13 @@ const db = admin.firestore();
 
 // ── RATE LIMITING ──
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,                   // max 20 requêtes par IP
+  windowMs: 15 * 60 * 1000,
+  max: 20,
   message: { error: 'Trop de requêtes, réessayez dans 15 minutes.' }
 });
 const ipnLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 50, // IPN peut être fréquent
+  max: 50,
   message: { error: 'Trop de requêtes IPN' }
 });
 
@@ -52,7 +53,7 @@ const verifyToken = async (req, res, next) => {
   const token = authHeader.replace('Bearer ', '').trim();
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    req.uid = decoded.uid; // uid vérifié côté serveur
+    req.uid = decoded.uid;
     next();
   } catch (e) {
     console.error('❌ Token invalide:', e.message);
@@ -60,14 +61,45 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
+// ── MIDDLEWARE : VÉRIFICATION ADMIN ──
+const verifyAdmin = async (req, res, next) => {
+  if (!req.uid) return res.status(401).json({ error: 'Non autorisé' });
+  if (req.uid !== ADMIN_UID) {
+    return res.status(403).json({ error: 'Accès réservé à l\'administrateur' });
+  }
+  next();
+};
+
+// ── MIDDLEWARE : VÉRIFICATION PROPRIÉTAIRE ──
+const verifyOwner = async (req, res, next) => {
+  if (!req.uid) return res.status(401).json({ error: 'Non autorisé' });
+  try {
+    const userSnap = await db.collection('users').doc(req.uid).get();
+    if (!userSnap.exists || userSnap.data().role !== 'owner') {
+      return res.status(403).json({ error: 'Accès réservé aux propriétaires de bus' });
+    }
+    if (userSnap.data().status !== 'active') {
+      return res.status(403).json({ error: 'Compte propriétaire non activé' });
+    }
+    req.ownerData = userSnap.data();
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+};
+
 // ── VALIDATION MONTANT ──
 const validateAmount = (amount) => {
   const amt = parseInt(amount);
   if (!amt || !Number.isInteger(amt)) return false;
-  if (amt < 100) return false;   // minimum 100 FCFA
-  if (amt > 500000) return false; // maximum 500 000 FCFA
+  if (amt < 100) return false;
+  if (amt > 500000) return false;
   return amt;
 };
+
+// ════════════════════════════════════════════════════════════
+// ── ROUTES EXISTANTES (inchangées) ──
+// ════════════════════════════════════════════════════════════
 
 // ── ROUTE TEST ──
 app.get('/', (req, res) => {
@@ -80,15 +112,13 @@ app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date() }));
 // ── INIT PAIEMENT PAYTECH ──
 app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
   const { amount, phone, method, type, meta } = req.body;
-  const uid = req.uid; // uid vérifié par le middleware, pas celui du body
+  const uid = req.uid;
 
-  // Validation montant
   const amt = validateAmount(amount);
   if (!amt) {
     return res.status(400).json({ error: 'Montant invalide (min 100, max 500 000 FCFA)' });
   }
 
-  // Validation type
   const allowedTypes = ['recharge', 'ticket', 'retrait'];
   if (!allowedTypes.includes(type)) {
     return res.status(400).json({ error: 'Type de paiement invalide' });
@@ -182,7 +212,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
       api_secret_sha256
     } = req.body;
 
-    // ✅ Vérification signature PayTech
     const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
     const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
 
@@ -222,7 +251,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
       const histRef     = db.collection('users').doc(uid).collection('history').doc();
       const finalMethod = method || txData.method || 'Mobile Money';
 
-      // ── CAS 1 : RECHARGE PASSAGER ──
       if (type === 'recharge') {
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(amount) });
         t.set(histRef, {
@@ -234,7 +262,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
         console.log(`✅ Recharge : ${uid} +${amount} FCFA`);
       }
 
-      // ── CAS 2 : TICKET ──
       else if (type === 'ticket' && meta) {
         const pendingRef = db.collection('pending').doc();
         t.set(pendingRef, {
@@ -259,7 +286,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
         console.log(`✅ Ticket : ${uid} -${amount} FCFA → receveur ${meta.busUid}`);
       }
 
-      // ── CAS 3 : RETRAIT ──
       else if (type === 'retrait') {
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
         t.set(histRef, {
@@ -350,7 +376,6 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
     const { payload, signature, price, receiverUid, syncRef } = tx;
 
     try {
-      // 1. Vérifier signature
       const expectedSig = crypto
         .createHmac('sha256', OFFLINE_SECRET)
         .update(JSON.stringify(payload))
@@ -361,26 +386,22 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
         continue;
       }
 
-      // 2. Expiration
       if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) {
         results.push({ syncRef, status: 'rejected', reason: 'QR expiré' });
         continue;
       }
 
-      // 3. Limite hors-ligne
       if (price > 1000) {
         results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA' });
         continue;
       }
 
-      // 4. Anti-double dépense
       const existingSnap = await db.collection('offline_transactions').doc(syncRef).get();
       if (existingSnap.exists) {
         results.push({ syncRef, status: 'already_synced' });
         continue;
       }
 
-      // 5. Vérifier solde réel Firebase
       const passengerRef  = db.collection('users').doc(payload.uid);
       const passengerSnap = await passengerRef.get();
       if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
@@ -388,7 +409,6 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
         continue;
       }
 
-      // 6. Transaction atomique
       const receiverRef = db.collection('users').doc(receiverUid);
       const passHistRef = db.collection('users').doc(payload.uid).collection('history').doc();
       const recvHistRef = db.collection('users').doc(receiverUid).collection('history').doc();
@@ -427,11 +447,537 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
   res.json({ results, synced, rejected });
 });
 
+
+// ════════════════════════════════════════════════════════════
+// ── NOUVELLES ROUTES : GESTION DES COMPTES ──
+// ════════════════════════════════════════════════════════════
+
+
+// ────────────────────────────────────────────────────────────
+// SECTION 1 — PROPRIÉTAIRES DE BUS
+// ────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/owners/request
+ * Un propriétaire soumet une demande d'inscription (en attente de validation admin).
+ * Body : { name, phone, email, companyName, busCount }
+ */
+app.post('/api/owners/request', verifyToken, limiter, async (req, res) => {
+  const uid = req.uid;
+  const { name, phone, email, companyName, busCount } = req.body;
+
+  if (!name || !phone || !email) {
+    return res.status(400).json({ error: 'Nom, téléphone et email sont obligatoires' });
+  }
+
+  try {
+    // Vérifier si une demande existe déjà
+    const existing = await db.collection('users').doc(uid).get();
+    if (existing.exists && existing.data().role === 'owner') {
+      return res.status(409).json({ error: 'Une demande propriétaire existe déjà pour ce compte' });
+    }
+
+    await db.collection('users').doc(uid).set({
+      uid,
+      name,
+      phone,
+      email,
+      companyName: companyName || '',
+      busCount:    busCount || 1,
+      role:        'owner',
+      status:      'pending',       // pending | active | rejected
+      balance:     0,
+      createdAt:   admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    console.log(`📋 Demande propriétaire : ${uid} (${name})`);
+    res.json({ message: 'Demande envoyée. En attente de validation par l\'administrateur.' });
+
+  } catch (err) {
+    console.error('❌ Erreur demande propriétaire:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/owners/status
+ * Un propriétaire consulte le statut de sa demande.
+ */
+app.get('/api/owners/status', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users').doc(req.uid).get();
+    if (!snap.exists || snap.data().role !== 'owner') {
+      return res.status(404).json({ error: 'Aucune demande propriétaire trouvée' });
+    }
+    const d = snap.data();
+    res.json({ status: d.status, name: d.name, email: d.email });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/owners/receivers
+ * Un propriétaire consulte la liste de ses receveurs (acceptés).
+ */
+app.get('/api/owners/receivers', verifyToken, verifyOwner, async (req, res) => {
+  try {
+    const snap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', req.uid)
+      .where('status', '==', 'active')
+      .get();
+
+    const receivers = snap.docs.map(d => ({
+      uid:       d.id,
+      name:      d.data().name,
+      phone:     d.data().phone,
+      email:     d.data().email,
+      balance:   d.data().balance || 0,
+      createdAt: d.data().createdAt
+    }));
+
+    res.json({ receivers });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/owners/receivers/pending
+ * Un propriétaire consulte les demandes de receveurs en attente.
+ */
+app.get('/api/owners/receivers/pending', verifyToken, verifyOwner, async (req, res) => {
+  try {
+    const snap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', req.uid)
+      .where('status', '==', 'pending')
+      .get();
+
+    const pending = snap.docs.map(d => ({
+      uid:       d.id,
+      name:      d.data().name,
+      phone:     d.data().phone,
+      email:     d.data().email,
+      createdAt: d.data().createdAt
+    }));
+
+    res.json({ pending });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/owners/receivers/:receiverUid/approve
+ * Un propriétaire accepte la demande d'un receveur.
+ */
+app.post('/api/owners/receivers/:receiverUid/approve', verifyToken, verifyOwner, async (req, res) => {
+  const { receiverUid } = req.params;
+  try {
+    const receiverSnap = await db.collection('users').doc(receiverUid).get();
+    if (!receiverSnap.exists || receiverSnap.data().role !== 'receiver') {
+      return res.status(404).json({ error: 'Receveur introuvable' });
+    }
+    if (receiverSnap.data().ownerUid !== req.uid) {
+      return res.status(403).json({ error: 'Ce receveur ne vous appartient pas' });
+    }
+    await db.collection('users').doc(receiverUid).update({
+      status:     'active',
+      approvedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    console.log(`✅ Receveur approuvé : ${receiverUid} par ${req.uid}`);
+    res.json({ message: 'Receveur approuvé avec succès' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/owners/receivers/:receiverUid/reject
+ * Un propriétaire refuse la demande d'un receveur.
+ */
+app.post('/api/owners/receivers/:receiverUid/reject', verifyToken, verifyOwner, async (req, res) => {
+  const { receiverUid } = req.params;
+  const { reason } = req.body;
+  try {
+    const receiverSnap = await db.collection('users').doc(receiverUid).get();
+    if (!receiverSnap.exists || receiverSnap.data().role !== 'receiver') {
+      return res.status(404).json({ error: 'Receveur introuvable' });
+    }
+    if (receiverSnap.data().ownerUid !== req.uid) {
+      return res.status(403).json({ error: 'Ce receveur ne vous appartient pas' });
+    }
+    await db.collection('users').doc(receiverUid).update({
+      status:     'rejected',
+      rejectReason: reason || '',
+      rejectedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    console.log(`❌ Receveur refusé : ${receiverUid} par ${req.uid}`);
+    res.json({ message: 'Demande du receveur refusée' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/owners/revenues
+ * Un propriétaire consulte les revenus générés par chacun de ses receveurs.
+ * Query params : ?from=YYYY-MM-DD&to=YYYY-MM-DD (optionnels)
+ */
+app.get('/api/owners/revenues', verifyToken, verifyOwner, async (req, res) => {
+  try {
+    // Récupérer tous les receveurs actifs du propriétaire
+    const receiversSnap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', req.uid)
+      .where('status', '==', 'active')
+      .get();
+
+    const revenues = [];
+
+    for (const receiverDoc of receiversSnap.docs) {
+      const receiverUid  = receiverDoc.id;
+      const receiverData = receiverDoc.data();
+
+      // Historique des collectes de ce receveur
+      let histQuery = db.collection('users').doc(receiverUid)
+        .collection('history')
+        .where('type', 'in', ['collect_offline', 'ticket']);
+
+      const histSnap = await histQuery.get();
+
+      let total = 0;
+      let count = 0;
+      histSnap.docs.forEach(h => {
+        const amt = h.data().amount || 0;
+        if (amt > 0) { total += amt; count++; }
+      });
+
+      revenues.push({
+        uid:         receiverUid,
+        name:        receiverData.name,
+        phone:       receiverData.phone,
+        balance:     receiverData.balance || 0,
+        totalEarned: total,
+        tripCount:   count
+      });
+    }
+
+    res.json({ revenues });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ────────────────────────────────────────────────────────────
+// SECTION 2 — RECEVEURS
+// ────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/receivers/owners
+ * Un futur receveur récupère la liste des propriétaires actifs pour choisir son employeur.
+ */
+app.get('/api/receivers/owners', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users')
+      .where('role', '==', 'owner')
+      .where('status', '==', 'active')
+      .get();
+
+    const owners = snap.docs.map(d => ({
+      uid:         d.id,
+      name:        d.data().name,
+      companyName: d.data().companyName || '',
+      busCount:    d.data().busCount || 0,
+      phone:       d.data().phone
+    }));
+
+    res.json({ owners });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/receivers/request
+ * Un receveur soumet sa demande d'inscription en choisissant un propriétaire.
+ * Body : { name, phone, email, ownerUid }
+ */
+app.post('/api/receivers/request', verifyToken, limiter, async (req, res) => {
+  const uid = req.uid;
+  const { name, phone, email, ownerUid } = req.body;
+
+  if (!name || !phone || !email || !ownerUid) {
+    return res.status(400).json({ error: 'Nom, téléphone, email et propriétaire sont obligatoires' });
+  }
+
+  try {
+    // Vérifier que le propriétaire existe et est actif
+    const ownerSnap = await db.collection('users').doc(ownerUid).get();
+    if (!ownerSnap.exists || ownerSnap.data().role !== 'owner' || ownerSnap.data().status !== 'active') {
+      return res.status(404).json({ error: 'Propriétaire introuvable ou inactif' });
+    }
+
+    // Vérifier si le receveur a déjà une demande
+    const existing = await db.collection('users').doc(uid).get();
+    if (existing.exists && existing.data().role === 'receiver') {
+      return res.status(409).json({ error: 'Vous avez déjà une demande en cours' });
+    }
+
+    await db.collection('users').doc(uid).set({
+      uid,
+      name,
+      phone,
+      email,
+      ownerUid,
+      ownerName: ownerSnap.data().name,
+      role:      'receiver',
+      status:    'pending',    // pending | active | rejected
+      balance:   0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    console.log(`📋 Demande receveur : ${uid} (${name}) → propriétaire ${ownerUid}`);
+    res.json({ message: 'Demande envoyée. En attente de validation par le propriétaire.' });
+
+  } catch (err) {
+    console.error('❌ Erreur demande receveur:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/receivers/status
+ * Un receveur consulte le statut de sa demande.
+ */
+app.get('/api/receivers/status', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users').doc(req.uid).get();
+    if (!snap.exists || snap.data().role !== 'receiver') {
+      return res.status(404).json({ error: 'Aucune demande receveur trouvée' });
+    }
+    const d = snap.data();
+    res.json({
+      status:    d.status,
+      name:      d.name,
+      ownerName: d.ownerName,
+      ownerUid:  d.ownerUid,
+      rejectReason: d.rejectReason || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ────────────────────────────────────────────────────────────
+// SECTION 3 — ADMINISTRATEUR
+// ────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/admin/owners
+ * L'admin voit tous les propriétaires (tous statuts confondus).
+ * Query params : ?status=pending|active|rejected
+ */
+app.get('/api/admin/owners', verifyToken, verifyAdmin, async (req, res) => {
+  const { status } = req.query;
+  try {
+    let query = db.collection('users').where('role', '==', 'owner');
+    if (status) query = query.where('status', '==', status);
+
+    const snap = await query.get();
+    const owners = snap.docs.map(d => ({
+      uid:         d.id,
+      name:        d.data().name,
+      phone:       d.data().phone,
+      email:       d.data().email,
+      companyName: d.data().companyName || '',
+      busCount:    d.data().busCount || 0,
+      status:      d.data().status,
+      createdAt:   d.data().createdAt
+    }));
+
+    res.json({ owners, total: owners.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/admin/owners/:ownerUid/approve
+ * L'admin approuve un propriétaire de bus.
+ */
+app.post('/api/admin/owners/:ownerUid/approve', verifyToken, verifyAdmin, async (req, res) => {
+  const { ownerUid } = req.params;
+  try {
+    const ownerSnap = await db.collection('users').doc(ownerUid).get();
+    if (!ownerSnap.exists || ownerSnap.data().role !== 'owner') {
+      return res.status(404).json({ error: 'Propriétaire introuvable' });
+    }
+
+    await db.collection('users').doc(ownerUid).update({
+      status:     'active',
+      approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      approvedBy: req.uid
+    });
+
+    console.log(`✅ Propriétaire approuvé par admin : ${ownerUid}`);
+    res.json({ message: 'Propriétaire approuvé avec succès' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/admin/owners/:ownerUid/reject
+ * L'admin refuse un propriétaire de bus.
+ */
+app.post('/api/admin/owners/:ownerUid/reject', verifyToken, verifyAdmin, async (req, res) => {
+  const { ownerUid } = req.params;
+  const { reason } = req.body;
+  try {
+    const ownerSnap = await db.collection('users').doc(ownerUid).get();
+    if (!ownerSnap.exists || ownerSnap.data().role !== 'owner') {
+      return res.status(404).json({ error: 'Propriétaire introuvable' });
+    }
+
+    await db.collection('users').doc(ownerUid).update({
+      status:       'rejected',
+      rejectReason: reason || '',
+      rejectedAt:   admin.firestore.FieldValue.serverTimestamp(),
+      rejectedBy:   req.uid
+    });
+
+    console.log(`❌ Propriétaire refusé par admin : ${ownerUid}`);
+    res.json({ message: 'Propriétaire refusé' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/admin/stats
+ * L'admin voit les statistiques globales de la plateforme.
+ */
+app.get('/api/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const [ownersSnap, receiversSnap, passengersSnap, txSnap] = await Promise.all([
+      db.collection('users').where('role', '==', 'owner').get(),
+      db.collection('users').where('role', '==', 'receiver').get(),
+      db.collection('users').where('role', '==', 'passenger').get(),
+      db.collection('paytech_transactions').where('status', '==', 'credited').get()
+    ]);
+
+    const ownersByStatus = { pending: 0, active: 0, rejected: 0 };
+    ownersSnap.docs.forEach(d => {
+      const s = d.data().status || 'pending';
+      ownersByStatus[s] = (ownersByStatus[s] || 0) + 1;
+    });
+
+    const receiversByStatus = { pending: 0, active: 0, rejected: 0 };
+    receiversSnap.docs.forEach(d => {
+      const s = d.data().status || 'pending';
+      receiversByStatus[s] = (receiversByStatus[s] || 0) + 1;
+    });
+
+    let totalVolume = 0;
+    txSnap.docs.forEach(d => { totalVolume += d.data().amount || 0; });
+
+    res.json({
+      owners:     { total: ownersSnap.size,    ...ownersByStatus },
+      receivers:  { total: receiversSnap.size, ...receiversByStatus },
+      passengers: { total: passengersSnap.size },
+      transactions: {
+        total:       txSnap.size,
+        totalVolume: totalVolume
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/owners/:ownerUid
+ * L'admin supprime un propriétaire et désactive ses receveurs.
+ */
+app.delete('/api/admin/owners/:ownerUid', verifyToken, verifyAdmin, async (req, res) => {
+  const { ownerUid } = req.params;
+  try {
+    const batch = db.batch();
+
+    // Désactiver les receveurs liés
+    const receiversSnap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', ownerUid)
+      .get();
+
+    receiversSnap.docs.forEach(d => {
+      batch.update(d.ref, { status: 'suspended', suspendedAt: admin.firestore.FieldValue.serverTimestamp() });
+    });
+
+    // Supprimer le propriétaire
+    batch.delete(db.collection('users').doc(ownerUid));
+
+    await batch.commit();
+
+    console.log(`🗑️ Propriétaire supprimé par admin : ${ownerUid} | ${receiversSnap.size} receveur(s) suspendus`);
+    res.json({ message: 'Propriétaire supprimé', receiversSuspended: receiversSnap.size });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ────────────────────────────────────────────────────────────
+// SECTION 4 — PROFIL UTILISATEUR COMMUN
+// ────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/profile
+ * Récupère le profil complet de l'utilisateur connecté (tous rôles).
+ */
+app.get('/api/profile', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users').doc(req.uid).get();
+    if (!snap.exists) return res.status(404).json({ error: 'Profil introuvable' });
+    res.json(snap.data());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/profile/history
+ * Récupère l'historique des transactions de l'utilisateur connecté.
+ * Query params : ?limit=20
+ */
+app.get('/api/profile/history', verifyToken, async (req, res) => {
+  const limit = parseInt(req.query.limit) || 20;
+  try {
+    const snap = await db.collection('users').doc(req.uid)
+      .collection('history')
+      .orderBy('ts', 'desc')
+      .limit(limit)
+      .get();
+
+    const history = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // ── DÉMARRAGE SERVEUR ──
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ TataPay Backend démarré — port ${PORT} | env: ${PAYTECH_ENV}`);
   console.log('🔒 Sécurité : CORS ✓ | Rate Limit ✓ | Token Firebase ✓ | Validation montant ✓');
+  console.log('👤 Rôles    : Admin ✓ | Propriétaire ✓ | Receveur ✓');
 
   // Keep-alive toutes les 9 minutes
   setInterval(() => {
