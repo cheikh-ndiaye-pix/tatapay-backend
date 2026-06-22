@@ -222,7 +222,7 @@ body{font-family:'Space Grotesk',sans-serif;background:var(--bk);color:var(--w);
     </div>
     <div id="fieldName" style="display:none"><div class="input-wrap"><label class="input-label">Nom complet *</label><input class="input-field" id="authName" placeholder="Moussa Diallo"/></div></div>
     <div class="input-wrap"><label class="input-label">E-mail *</label><input class="input-field" id="authEmail" type="email" placeholder="exemple@email.com"/></div>
-    <div id="fieldPhone" style="display:none"><div class="input-wrap"><label class="input-label">Téléphone *</label><input class="input-field" id="authPhone" type="tel" placeholder="77 123 45 67"/></div></div>
+    <div id="fieldPhone" style="display:none"><div class="input-wrap"><label class="input-label">Téléphone * <span id="phoneLabelNote" style="color:#FF6B00;font-size:10px;">(obligatoire pour les retraits)</span></label><input class="input-field" id="authPhone" type="tel" placeholder="77 123 45 67"/></div></div>
     <div id="fieldsReceiver" style="display:none;">
       <div class="input-wrap"><label class="input-label">GIE *</label><input class="input-field" id="authGIE" placeholder="DPL"/></div>
       <div class="input-wrap"><label class="input-label">N° Véhicule *</label><input class="input-field" id="authVehicle" placeholder="AA809ST"/></div>
@@ -651,6 +651,8 @@ window.doAuth=async()=>{
       const walletId=S.authRole==='passenger'?'TP-'+uid.slice(0,6).toUpperCase():'RV-'+uid.slice(0,6).toUpperCase();
       let profile={walletId,name,email,phone:document.getElementById('authPhone').value.trim(),role:S.authRole,balance:0,createdAt:serverTimestamp()};
       if(S.authRole==='receiver'){
+        const phone=document.getElementById('authPhone').value.trim();
+        if(!phone){loader('',false);notify('⚠️','Téléphone requis','Le numéro de téléphone est obligatoire pour les receveurs.');return;}
         const gie=document.getElementById('authGIE').value.trim();
         const vehicle=document.getElementById('authVehicle').value.trim();
         const ligne=document.getElementById('authLigne').value.trim();
