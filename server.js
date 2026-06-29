@@ -26,6 +26,7 @@ const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
 const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
 const OFFLINE_SECRET     = (process.env.OFFLINE_SECRET || 'tatapay-offline-secret-2026').trim();
 const ADMIN_UID          = (process.env.ADMIN_UID || '').trim();
+const COMMISSION_RATE    = 0.02; // 2% commission TataPay sur chaque ticket
 
 // ── FIREBASE ──
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -398,19 +399,33 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
       }
 
       else if (type === 'ticket' && meta) {
-        const pendingRef = db.collection('pending').doc();
+        // ── CALCUL COMMISSION 2% ──
+        const commission    = Math.round(amount * COMMISSION_RATE); // 2% pour TataPay
+        const receiverAmt   = amount - commission;                  // Ce que reçoit le receveur
+
+        const pendingRef    = db.collection('pending').doc();
+        const receiverRef   = db.collection('users').doc(meta.busUid);
+        const recvHistRef   = db.collection('users').doc(meta.busUid).collection('history').doc();
+        const adminRef      = db.collection('users').doc(ADMIN_UID);
+        const adminHistRef  = db.collection('users').doc(ADMIN_UID).collection('history').doc();
+        const commHistRef   = db.collection('commissions').doc();
+
+        // Enregistrement du ticket
         t.set(pendingRef, {
           busUid: meta.busUid, busId: meta.busId,
           passengerUid: uid, passengerId: meta.passengerId,
           passengerName: meta.passengerName,
           from: meta.from, to: meta.to,
           section: meta.section, price: amount,
+          commission, receiverAmt,
           method: finalMethod, gie: meta.gie,
           vehicle: meta.vehicle, ligne: meta.ligne,
           zone: meta.zone, ref: ref_command,
           paidAt: admin.firestore.FieldValue.serverTimestamp(),
           status: 'pending'
         });
+
+        // Débit passager
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
         t.set(histRef, {
           type: 'ticket',
@@ -418,7 +433,36 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
           amount: -amount, ref: ref_command,
           ts: admin.firestore.FieldValue.serverTimestamp()
         });
-        console.log(`✅ Ticket : ${uid} -${amount} FCFA → receveur ${meta.busUid}`);
+
+        // Crédit receveur (montant - commission)
+        t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(receiverAmt) });
+        t.set(recvHistRef, {
+          type: 'collect',
+          label: `Collecte ticket ${meta.gie}/${meta.vehicle} — ${ref_command}`,
+          amount: receiverAmt, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Crédit admin (commission TataPay)
+        if (ADMIN_UID) {
+          t.update(adminRef, { balance: admin.firestore.FieldValue.increment(commission) });
+          t.set(adminHistRef, {
+            type: 'commission',
+            label: `Commission 2% — ${meta.gie}/${meta.vehicle} — ${ref_command}`,
+            amount: commission, ref: ref_command,
+            ts: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        // Log commission séparé
+        t.set(commHistRef, {
+          ref: ref_command, amount, commission, receiverAmt,
+          rate: COMMISSION_RATE, receiverUid: meta.busUid,
+          passengerUid: uid, gie: meta.gie, vehicle: meta.vehicle,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log(`✅ Ticket : ${uid} -${amount} FCFA | receveur +${receiverAmt} | TataPay +${commission}`);
       }
 
       else if (type === 'retrait') {
