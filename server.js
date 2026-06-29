@@ -195,7 +195,14 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
   }
 });
 
-// ── RETRAIT RÉEL VIA PAYTECH FUND CALL ──
+// ── MAPPING OPÉRATEUR → SERVICE PAYTECH ──
+const SERVICE_MAP = {
+  'wave':   'Wave Senegal',
+  'orange': 'Orange Money Senegal',
+  'free':   'Free Money'
+};
+
+// ── RETRAIT RÉEL VIA PAYTECH TRANSFER API ──
 app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
   const { amount, phone, method } = req.body;
   const uid = req.uid;
@@ -203,6 +210,9 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
   const amt = validateAmount(amount);
   if (!amt) return res.status(400).json({ error: 'Montant invalide (min 100, max 500 000 FCFA)' });
   if (!phone) return res.status(400).json({ error: 'Numéro de téléphone requis' });
+
+  const service = SERVICE_MAP[method] || SERVICE_MAP['wave'];
+  const externalId = 'TTW-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
   try {
     // Vérifier solde suffisant
@@ -212,19 +222,17 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
     const balance = userSnap.data().balance || 0;
     if (balance < amt) return res.status(400).json({ error: 'Solde insuffisant' });
 
-    const refCommand = 'TTW-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-
-    // Fund call PayTech
+    // Appel PayTech Transfer API
     const payload = {
-      montant:     amt,
-      numero:      phone,
-      operateur:   method || 'wave',
-      ref_command: refCommand,
-      env:         PAYTECH_ENV
+      amount:             amt,
+      destination_number: phone,
+      service:            service,
+      callback_url:       'https://tatapay-backend-1.onrender.com/api/transfer-callback',
+      external_id:        externalId
     };
 
     const fetch = await import('node-fetch');
-    const response = await fetch.default('https://paytech.sn/api/payment/fund-call', {
+    const response = await fetch.default('https://paytech.sn/api/transfer/transferFund', {
       method: 'POST',
       headers: {
         'API_KEY':      PAYTECH_API_KEY,
@@ -235,41 +243,90 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
     });
 
     const rawText = await response.text();
-    console.log('💸 Fund call PayTech:', response.status, rawText.slice(0, 300));
+    console.log('💸 Transfer PayTech:', response.status, rawText.slice(0, 400));
 
     let data;
     try {
       data = JSON.parse(rawText);
     } catch (e) {
-      return res.status(502).json({ error: 'Réponse non-JSON PayTech', raw: rawText.slice(0, 300) });
+      return res.status(502).json({ error: 'Réponse non-JSON PayTech', raw: rawText.slice(0, 400) });
     }
 
-    if (data.success || response.status === 200) {
-      // Décrémenter solde + historique
+    if (data.success === 1) {
+      // Décrémenter solde + enregistrer historique
       const histRef = db.collection('users').doc(uid).collection('history').doc();
       await db.runTransaction(async (t) => {
         t.update(db.collection('users').doc(uid), {
           balance: admin.firestore.FieldValue.increment(-amt)
         });
         t.set(histRef, {
-          type:   'withdraw',
-          label:  `Retrait ${method || 'Wave'} — ${phone} — ${refCommand}`,
-          amount: -amt,
-          ref:    refCommand,
-          ts:     admin.firestore.FieldValue.serverTimestamp()
+          type:        'withdraw',
+          label:       `Retrait ${service} — ${phone} — ${externalId}`,
+          amount:      -amt,
+          ref:         externalId,
+          transferId:  data.transfer?.id_transfer || '',
+          status:      'pending',
+          ts:          admin.firestore.FieldValue.serverTimestamp()
         });
       });
 
-      console.log(`✅ Retrait : ${uid} -${amt} FCFA → ${phone}`);
-      res.json({ message: 'Retrait effectué avec succès', ref: refCommand });
+      console.log(`✅ Retrait initié : ${uid} -${amt} FCFA → ${phone} (${service})`);
+      res.json({
+        message:    'Retrait en cours de traitement',
+        ref:        externalId,
+        transferId: data.transfer?.id_transfer || '',
+        status:     'pending'
+      });
 
     } else {
+      console.error('❌ Échec transfer PayTech:', data);
       res.status(400).json({ error: data.message || 'Échec PayTech', details: data });
     }
 
   } catch (err) {
     console.error('❌ Erreur retrait:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CALLBACK TRANSFER PAYTECH ──
+app.post('/api/transfer-callback', async (req, res) => {
+  console.log('📩 Transfer callback reçu:', JSON.stringify(req.body));
+
+  try {
+    const {
+      type_event,
+      external_id,
+      id_transfer,
+      amount,
+      service_name,
+      state,
+      destination_number,
+      api_key_sha256,
+      api_secret_sha256
+    } = req.body;
+
+    // Vérification signature
+    const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
+    const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
+
+    if (api_key_sha256 !== expectedKeyHash || api_secret_sha256 !== expectedSecretHash) {
+      console.error('❌ Callback non authentifié');
+      return res.status(403).send('Forbidden');
+    }
+
+    if (type_event === 'transfer_success') {
+      console.log(`✅ Transfer confirmé : ${id_transfer} — ${amount} FCFA → ${destination_number}`);
+      // Optionnel : mettre à jour le statut dans l'historique
+    } else if (type_event === 'transfer_failed') {
+      console.error(`❌ Transfer échoué : ${id_transfer}`);
+      // Optionnel : rembourser le solde si nécessaire
+    }
+
+    res.status(200).send('OK');
+  } catch (err) {
+    console.error('❌ Erreur callback transfer:', err);
+    res.status(500).send('Erreur');
   }
 });
 
