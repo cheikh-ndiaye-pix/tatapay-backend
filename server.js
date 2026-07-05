@@ -7,26 +7,14 @@ const rateLimit = require('express-rate-limit');
 const app       = express();
 
 // ── CORS SÉCURISÉ ──
-const allowedOrigins = [
-  'https://tatapay-a4972.web.app',
-  'https://tatapay-a4972.firebaseapp.com',
-  'https://steady-eclair-770c6e.netlify.app',
-  'https://moonlit-biscochitos-65169b.netlify.app',
-  'https://serene-croissant-6cebc0.netlify.app',
-  'https://endearing-sorbet-5fbf83.netlify.app',
-  'https://lit-biscochitos-65169b.netlify.app',
-  'http://localhost:8081',
-  'http://localhost:19006',
-  'exp://192.168.1.91:8081'
-];
-
 app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (origin.startsWith('exp://')) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('CORS non autorisé : ' + origin));
-  }
+  origin: [
+    'https://tatapay-a4972.web.app',
+    'https://tatapay-a4972.firebaseapp.com',
+    'http://localhost:8081',
+    'http://localhost:19006',
+    'exp://192.168.1.91:8081'
+  ]
 }));
 
 app.use(express.json());
@@ -37,6 +25,8 @@ const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY    || '').trim();
 const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
 const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
 const OFFLINE_SECRET     = (process.env.OFFLINE_SECRET || 'tatapay-offline-secret-2026').trim();
+const ADMIN_UID          = (process.env.ADMIN_UID || '').trim();
+const COMMISSION_RATE    = 0.02; // 2% commission TataPay sur chaque ticket
 
 // ── FIREBASE ──
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -72,6 +62,33 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
+// ── MIDDLEWARE : VÉRIFICATION ADMIN ──
+const verifyAdmin = async (req, res, next) => {
+  if (!req.uid) return res.status(401).json({ error: 'Non autorisé' });
+  if (req.uid !== ADMIN_UID) {
+    return res.status(403).json({ error: 'Accès réservé à l\'administrateur' });
+  }
+  next();
+};
+
+// ── MIDDLEWARE : VÉRIFICATION PROPRIÉTAIRE ──
+const verifyOwner = async (req, res, next) => {
+  if (!req.uid) return res.status(401).json({ error: 'Non autorisé' });
+  try {
+    const userSnap = await db.collection('users').doc(req.uid).get();
+    if (!userSnap.exists || userSnap.data().role !== 'owner') {
+      return res.status(403).json({ error: 'Accès réservé aux propriétaires de bus' });
+    }
+    if (userSnap.data().status !== 'active') {
+      return res.status(403).json({ error: 'Compte propriétaire non activé' });
+    }
+    req.ownerData = userSnap.data();
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+};
+
 // ── VALIDATION MONTANT ──
 const validateAmount = (amount) => {
   const amt = parseInt(amount);
@@ -80,6 +97,10 @@ const validateAmount = (amount) => {
   if (amt > 500000) return false;
   return amt;
 };
+
+// ════════════════════════════════════════════════════════════
+// ── ROUTES ──
+// ════════════════════════════════════════════════════════════
 
 // ── ROUTE TEST ──
 app.get('/', (req, res) => {
@@ -107,28 +128,42 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
   const refCommand = 'TTP-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
   await db.collection('paytech_transactions').doc(refCommand).set({
-    uid, amount: amt, type, method: method || 'wave',
-    meta: meta || null, status: 'pending',
+    uid,
+    amount: amt,
+    type:      type,
+    method:    method || null,
+    meta:      meta || null,
+    status:    'pending',
     createdAt: admin.firestore.FieldValue.serverTimestamp()
   });
 
-  const itemNames = { recharge: 'Recharge TataPay', ticket: 'Ticket TataPay', retrait: 'Retrait TataPay' };
+  const itemNames = {
+    recharge: 'Recharge TataPay',
+    ticket:   'Ticket TataPay',
+    retrait:  'Retrait TataPay'
+  };
 
   const payload = {
-    item_name:      itemNames[type] || 'TataPay',
-    item_price:     amt,
-    currency:       'XOF',
-    ref_command:    refCommand,
-    command_name:   'TataPay Paiement',
-    env:            PAYTECH_ENV,
-    ipn_url:        'https://tatapay-backend-1.onrender.com/api/ipn',
-    success_url:    'https://tatapay-a4972.web.app/success.html',
-    cancel_url:     'https://tatapay-a4972.web.app/cancel.html',
-    sender_phone:   phone || '',
-    sender_country: 'SN',
-    channel:        method || 'wave',
-    custom_field:   JSON.stringify({ uid, type, ref: refCommand })
+    item_name:       itemNames[type] || 'TataPay',
+    item_price:      amt,
+    currency:        'XOF',
+    ref_command:     refCommand,
+    command_name:    'TataPay Paiement',
+    env:             PAYTECH_ENV,
+    ipn_url:         'https://tatapay-backend-1.onrender.com/api/ipn',
+    success_url:     'https://tatapay-a4972.web.app/success.html',
+    cancel_url:      'https://tatapay-a4972.web.app/cancel.html',
+    sender_phone:    phone || '',
+    sender_country:  'SN',
+    custom_field:    JSON.stringify({ uid, type, ref: refCommand })
   };
+
+  // On ne fixe le "channel" que si un opérateur précis a été explicitement choisi.
+  // Sans channel, PayTech affiche lui-même son écran de sélection d'opérateur
+  // (Wave / Orange Money / Free Money) — c'est le comportement voulu par défaut.
+  if (method) {
+    payload.channel = method;
+  }
 
   try {
     const fetch = await import('node-fetch');
@@ -147,8 +182,11 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
     console.log('🔍 Réponse PayTech:', rawText.slice(0, 500));
 
     let data;
-    try { data = JSON.parse(rawText); }
-    catch (e) { return res.status(502).json({ error: 'Réponse non-JSON de PayTech', raw: rawText.slice(0, 500) }); }
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      return res.status(502).json({ error: 'Réponse non-JSON de PayTech', raw: rawText.slice(0, 500) });
+    }
 
     if (data.payment_url || data.redirect_url) {
       const url = data.payment_url || data.redirect_url;
@@ -157,20 +195,164 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
       await db.collection('paytech_transactions').doc(refCommand).delete();
       res.status(500).json({ error: data.message || 'Erreur PayTech', details: data });
     }
+
   } catch (error) {
     console.error('❌ Erreur init paiement:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ── IPN PAYTECH ──
+// ── MAPPING OPÉRATEUR → SERVICE PAYTECH ──
+const SERVICE_MAP = {
+  'wave':   'Wave Senegal',
+  'orange': 'Orange Money Senegal',
+  'free':   'Free Money'
+};
+
+// ── RETRAIT RÉEL VIA PAYTECH TRANSFER API ──
+app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
+  const { amount, phone, method } = req.body;
+  const uid = req.uid;
+
+  const amt = validateAmount(amount);
+  if (!amt) return res.status(400).json({ error: 'Montant invalide (min 100, max 500 000 FCFA)' });
+  if (!phone) return res.status(400).json({ error: 'Numéro de téléphone requis' });
+
+  const service = SERVICE_MAP[method] || SERVICE_MAP['wave'];
+  const externalId = 'TTW-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+  try {
+    // Vérifier solde suffisant
+    const userSnap = await db.collection('users').doc(uid).get();
+    if (!userSnap.exists) return res.status(404).json({ error: 'Utilisateur introuvable' });
+
+    const balance = userSnap.data().balance || 0;
+    if (balance < amt) return res.status(400).json({ error: 'Solde insuffisant' });
+
+    // Appel PayTech Transfer API
+    const payload = {
+      amount:             amt,
+      destination_number: phone,
+      service:            service,
+      callback_url:       'https://tatapay-backend-1.onrender.com/api/transfer-callback',
+      external_id:        externalId
+    };
+
+    const fetch = await import('node-fetch');
+    const response = await fetch.default('https://paytech.sn/api/transfer/transferFund', {
+      method: 'POST',
+      headers: {
+        'API_KEY':      PAYTECH_API_KEY,
+        'API_SECRET':   PAYTECH_API_SECRET,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const rawText = await response.text();
+    console.log('💸 Transfer PayTech:', response.status, rawText.slice(0, 400));
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      return res.status(502).json({ error: 'Réponse non-JSON PayTech', raw: rawText.slice(0, 400) });
+    }
+
+    if (data.success === 1) {
+      // Décrémenter solde + enregistrer historique
+      const histRef = db.collection('users').doc(uid).collection('history').doc();
+      await db.runTransaction(async (t) => {
+        t.update(db.collection('users').doc(uid), {
+          balance: admin.firestore.FieldValue.increment(-amt)
+        });
+        t.set(histRef, {
+          type:        'withdraw',
+          label:       `Retrait ${service} — ${phone} — ${externalId}`,
+          amount:      -amt,
+          ref:         externalId,
+          transferId:  data.transfer?.id_transfer || '',
+          status:      'pending',
+          ts:          admin.firestore.FieldValue.serverTimestamp()
+        });
+      });
+
+      console.log(`✅ Retrait initié : ${uid} -${amt} FCFA → ${phone} (${service})`);
+      res.json({
+        message:    'Retrait en cours de traitement',
+        ref:        externalId,
+        transferId: data.transfer?.id_transfer || '',
+        status:     'pending'
+      });
+
+    } else {
+      console.error('❌ Échec transfer PayTech:', data);
+      res.status(400).json({ error: data.message || 'Échec PayTech', details: data });
+    }
+
+  } catch (err) {
+    console.error('❌ Erreur retrait:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CALLBACK TRANSFER PAYTECH ──
+app.post('/api/transfer-callback', async (req, res) => {
+  console.log('📩 Transfer callback reçu:', JSON.stringify(req.body));
+
+  try {
+    const {
+      type_event,
+      external_id,
+      id_transfer,
+      amount,
+      service_name,
+      state,
+      destination_number,
+      api_key_sha256,
+      api_secret_sha256
+    } = req.body;
+
+    // Vérification signature
+    const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
+    const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
+
+    if (api_key_sha256 !== expectedKeyHash || api_secret_sha256 !== expectedSecretHash) {
+      console.error('❌ Callback non authentifié');
+      return res.status(403).send('Forbidden');
+    }
+
+    if (type_event === 'transfer_success') {
+      console.log(`✅ Transfer confirmé : ${id_transfer} — ${amount} FCFA → ${destination_number}`);
+      // Optionnel : mettre à jour le statut dans l'historique
+    } else if (type_event === 'transfer_failed') {
+      console.error(`❌ Transfer échoué : ${id_transfer}`);
+      // Optionnel : rembourser le solde si nécessaire
+    }
+
+    res.status(200).send('OK');
+  } catch (err) {
+    console.error('❌ Erreur callback transfer:', err);
+    res.status(500).send('Erreur');
+  }
+});
+
+// ── IPN PAYTECH (sécurisé) ──
 app.post('/api/ipn', ipnLimiter, async (req, res) => {
   console.log('📩 IPN reçu:', JSON.stringify({
-    type_event: req.body.type_event, ref_command: req.body.ref_command, item_price: req.body.item_price
+    type_event:  req.body.type_event,
+    ref_command: req.body.ref_command,
+    item_price:  req.body.item_price
   }));
 
   try {
-    const { type_event, ref_command, method, api_key_sha256, api_secret_sha256 } = req.body;
+    const {
+      type_event,
+      ref_command,
+      method,
+      api_key_sha256,
+      api_secret_sha256
+    } = req.body;
 
     const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
     const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
@@ -189,12 +371,23 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
 
     await db.runTransaction(async (t) => {
       const txSnap = await t.get(txRef);
-      if (!txSnap.exists) { console.error('❌ Transaction inconnue:', ref_command); return; }
-      if (txSnap.data().status === 'credited') { console.log('⚠️ Déjà crédité:', ref_command); return; }
+
+      if (!txSnap.exists) {
+        console.error('❌ Transaction inconnue:', ref_command);
+        return;
+      }
+      if (txSnap.data().status === 'credited') {
+        console.log('⚠️ Déjà crédité:', ref_command);
+        return;
+      }
 
       const txData = txSnap.data();
       const { uid, amount, type, meta } = txData;
-      if (!uid || !amount) { console.error('❌ uid ou amount manquant'); return; }
+
+      if (!uid || !amount) {
+        console.error('❌ uid ou amount manquant');
+        return;
+      }
 
       const userRef     = db.collection('users').doc(uid);
       const histRef     = db.collection('users').doc(uid).collection('history').doc();
@@ -202,24 +395,101 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
 
       if (type === 'recharge') {
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(amount) });
-        t.set(histRef, { type: 'recharge', label: `Recharge via ${finalMethod} — ${ref_command}`, amount, ref: ref_command, ts: admin.firestore.FieldValue.serverTimestamp() });
+        t.set(histRef, {
+          type: 'recharge',
+          label: `Recharge via ${finalMethod} — ${ref_command}`,
+          amount, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
         console.log(`✅ Recharge : ${uid} +${amount} FCFA`);
-      } else if (type === 'ticket' && meta) {
-        const pendingRef = db.collection('pending').doc();
-        t.set(pendingRef, { busUid: meta.busUid, busId: meta.busId, passengerUid: uid, passengerId: meta.passengerId, passengerName: meta.passengerName, from: meta.from, to: meta.to, section: meta.section, price: amount, method: finalMethod, gie: meta.gie, vehicle: meta.vehicle, ligne: meta.ligne, zone: meta.zone, ref: ref_command, paidAt: admin.firestore.FieldValue.serverTimestamp(), status: 'pending' });
+      }
+
+      else if (type === 'ticket' && meta) {
+        // ── CALCUL COMMISSION 2% ──
+        const commission    = Math.round(amount * COMMISSION_RATE); // 2% pour TataPay
+        const receiverAmt   = amount - commission;                  // Ce que reçoit le receveur
+
+        const pendingRef    = db.collection('pending').doc();
+        const receiverRef   = db.collection('users').doc(meta.busUid);
+        const recvHistRef   = db.collection('users').doc(meta.busUid).collection('history').doc();
+        const adminRef      = db.collection('users').doc(ADMIN_UID);
+        const adminHistRef  = db.collection('users').doc(ADMIN_UID).collection('history').doc();
+        const commHistRef   = db.collection('commissions').doc();
+
+        // Enregistrement du ticket
+        t.set(pendingRef, {
+          busUid: meta.busUid, busId: meta.busId,
+          passengerUid: uid, passengerId: meta.passengerId,
+          passengerName: meta.passengerName,
+          from: meta.from, to: meta.to,
+          section: meta.section, price: amount,
+          commission, receiverAmt,
+          method: finalMethod, gie: meta.gie,
+          vehicle: meta.vehicle, ligne: meta.ligne,
+          zone: meta.zone, ref: ref_command,
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
+          status: 'pending'
+        });
+
+        // Débit passager
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
-        t.set(histRef, { type: 'ticket', label: `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to}`, amount: -amount, ref: ref_command, ts: admin.firestore.FieldValue.serverTimestamp() });
-        console.log(`✅ Ticket : ${uid} -${amount} FCFA → receveur ${meta.busUid}`);
-      } else if (type === 'retrait') {
+        t.set(histRef, {
+          type: 'ticket',
+          label: `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to}`,
+          amount: -amount, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Crédit receveur (montant - commission)
+        t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(receiverAmt) });
+        t.set(recvHistRef, {
+          type: 'collect',
+          label: `Collecte ticket ${meta.gie}/${meta.vehicle} — ${ref_command}`,
+          amount: receiverAmt, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Crédit admin (commission TataPay)
+        if (ADMIN_UID) {
+          t.update(adminRef, { balance: admin.firestore.FieldValue.increment(commission) });
+          t.set(adminHistRef, {
+            type: 'commission',
+            label: `Commission 2% — ${meta.gie}/${meta.vehicle} — ${ref_command}`,
+            amount: commission, ref: ref_command,
+            ts: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        // Log commission séparé
+        t.set(commHistRef, {
+          ref: ref_command, amount, commission, receiverAmt,
+          rate: COMMISSION_RATE, receiverUid: meta.busUid,
+          passengerUid: uid, gie: meta.gie, vehicle: meta.vehicle,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log(`✅ Ticket : ${uid} -${amount} FCFA | receveur +${receiverAmt} | TataPay +${commission}`);
+      }
+
+      else if (type === 'retrait') {
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
-        t.set(histRef, { type: 'withdraw', label: `Retrait via ${finalMethod} — ${ref_command}`, amount: -amount, ref: ref_command, ts: admin.firestore.FieldValue.serverTimestamp() });
+        t.set(histRef, {
+          type: 'withdraw',
+          label: `Retrait via ${finalMethod} — ${ref_command}`,
+          amount: -amount, ref: ref_command,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
         console.log(`✅ Retrait : ${uid} -${amount} FCFA`);
       }
 
-      t.update(txRef, { status: 'credited', method: finalMethod, creditedAt: admin.firestore.FieldValue.serverTimestamp() });
+      t.update(txRef, {
+        status: 'credited', method: finalMethod,
+        creditedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
     });
 
     res.status(200).send('OK');
+
   } catch (err) {
     console.error('❌ Erreur IPN:', err);
     res.status(500).send('Erreur');
@@ -234,11 +504,23 @@ app.post('/api/offline/qr', verifyToken, limiter, async (req, res) => {
     if (!userSnap.exists) return res.status(404).json({ error: 'Utilisateur introuvable' });
 
     const userData = userSnap.data();
-    const payload = { uid, walletId: userData.walletId, name: userData.name, balance: userData.balance || 0, issuedAt: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
-    const signature = crypto.createHmac('sha256', OFFLINE_SECRET).update(JSON.stringify(payload)).digest('hex');
+    const payload = {
+      uid,
+      walletId:  userData.walletId,
+      name:      userData.name,
+      balance:   userData.balance || 0,
+      issuedAt:  Date.now(),
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000
+    };
+
+    const signature = crypto
+      .createHmac('sha256', OFFLINE_SECRET)
+      .update(JSON.stringify(payload))
+      .digest('hex');
 
     console.log(`✅ QR offline : ${uid} | solde: ${payload.balance} FCFA`);
     res.json({ payload, signature });
+
   } catch (err) {
     console.error('❌ Erreur QR offline:', err);
     res.status(500).json({ error: err.message });
@@ -251,10 +533,16 @@ app.post('/api/offline/verify', async (req, res) => {
   if (!payload || !signature) return res.status(400).json({ error: 'Données manquantes' });
 
   try {
-    const expectedSig = crypto.createHmac('sha256', OFFLINE_SECRET).update(JSON.stringify(payload)).digest('hex');
-    const valid = expectedSig === signature;
-    const expired = Date.now() > payload.expiresAt;
-    res.json({ valid, expired, maxOffline: 1000 });
+    const expectedSig = crypto
+      .createHmac('sha256', OFFLINE_SECRET)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    const valid      = expectedSig === signature;
+    const expired    = Date.now() > payload.expiresAt;
+    const maxOffline = 1000;
+
+    res.json({ valid, expired, maxOffline });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -263,24 +551,48 @@ app.post('/api/offline/verify', async (req, res) => {
 // ── SYNC TRANSACTIONS HORS-LIGNE ──
 app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
   const { transactions } = req.body;
-  if (!transactions || !Array.isArray(transactions)) return res.status(400).json({ error: 'Tableau de transactions manquant' });
+  if (!transactions || !Array.isArray(transactions)) {
+    return res.status(400).json({ error: 'Tableau de transactions manquant' });
+  }
 
   const results = [];
 
   for (const tx of transactions) {
     const { payload, signature, price, receiverUid, syncRef } = tx;
+
     try {
-      const expectedSig = crypto.createHmac('sha256', OFFLINE_SECRET).update(JSON.stringify(payload)).digest('hex');
-      if (expectedSig !== signature) { results.push({ syncRef, status: 'rejected', reason: 'Signature invalide' }); continue; }
-      if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) { results.push({ syncRef, status: 'rejected', reason: 'QR expiré' }); continue; }
-      if (price > 1000) { results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA' }); continue; }
+      const expectedSig = crypto
+        .createHmac('sha256', OFFLINE_SECRET)
+        .update(JSON.stringify(payload))
+        .digest('hex');
+
+      if (expectedSig !== signature) {
+        results.push({ syncRef, status: 'rejected', reason: 'Signature invalide' });
+        continue;
+      }
+
+      if (Date.now() > payload.expiresAt + 24 * 60 * 60 * 1000) {
+        results.push({ syncRef, status: 'rejected', reason: 'QR expiré' });
+        continue;
+      }
+
+      if (price > 1000) {
+        results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA' });
+        continue;
+      }
 
       const existingSnap = await db.collection('offline_transactions').doc(syncRef).get();
-      if (existingSnap.exists) { results.push({ syncRef, status: 'already_synced' }); continue; }
+      if (existingSnap.exists) {
+        results.push({ syncRef, status: 'already_synced' });
+        continue;
+      }
 
       const passengerRef  = db.collection('users').doc(payload.uid);
       const passengerSnap = await passengerRef.get();
-      if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) { results.push({ syncRef, status: 'rejected', reason: 'Solde insuffisant' }); continue; }
+      if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
+        results.push({ syncRef, status: 'rejected', reason: 'Solde insuffisant' });
+        continue;
+      }
 
       const receiverRef = db.collection('users').doc(receiverUid);
       const passHistRef = db.collection('users').doc(payload.uid).collection('history').doc();
@@ -288,14 +600,26 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
 
       await db.runTransaction(async (t) => {
         t.update(passengerRef, { balance: admin.firestore.FieldValue.increment(-price) });
-        t.set(passHistRef, { type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`, amount: -price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp() });
+        t.set(passHistRef, {
+          type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`,
+          amount: -price, ref: syncRef,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
         t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(price) });
-        t.set(recvHistRef, { type: 'collect_offline', label: `Collecte hors-ligne — ${syncRef}`, amount: price, ref: syncRef, ts: admin.firestore.FieldValue.serverTimestamp() });
-        t.set(db.collection('offline_transactions').doc(syncRef), { passengerUid: payload.uid, receiverUid, price, syncRef, syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced' });
+        t.set(recvHistRef, {
+          type: 'collect_offline', label: `Collecte hors-ligne — ${syncRef}`,
+          amount: price, ref: syncRef,
+          ts: admin.firestore.FieldValue.serverTimestamp()
+        });
+        t.set(db.collection('offline_transactions').doc(syncRef), {
+          passengerUid: payload.uid, receiverUid, price, syncRef,
+          syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced'
+        });
       });
 
       results.push({ syncRef, status: 'synced' });
       console.log(`✅ Sync offline : ${payload.uid} -${price} FCFA → ${receiverUid}`);
+
     } catch (err) {
       console.error(`❌ Erreur sync ${syncRef}:`, err.message);
       results.push({ syncRef, status: 'error', reason: err.message });
@@ -308,13 +632,372 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
   res.json({ results, synced, rejected });
 });
 
+
+// ════════════════════════════════════════════════════════════
+// ── GESTION DES COMPTES ──
+// ════════════════════════════════════════════════════════════
+
+// ── PROPRIÉTAIRES ──
+
+app.post('/api/owners/request', verifyToken, limiter, async (req, res) => {
+  const uid = req.uid;
+  const { name, phone, email, companyName, busCount } = req.body;
+  if (!name || !phone || !email) {
+    return res.status(400).json({ error: 'Nom, téléphone et email sont obligatoires' });
+  }
+  try {
+    const existing = await db.collection('users').doc(uid).get();
+    if (existing.exists && existing.data().role === 'owner') {
+      return res.status(409).json({ error: 'Une demande propriétaire existe déjà pour ce compte' });
+    }
+    await db.collection('users').doc(uid).set({
+      uid, name, phone, email,
+      companyName: companyName || '',
+      busCount:    busCount || 1,
+      role:        'owner',
+      status:      'pending',
+      balance:     0,
+      createdAt:   admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    console.log(`📋 Demande propriétaire : ${uid} (${name})`);
+    res.json({ message: 'Demande envoyée. En attente de validation par l\'administrateur.' });
+  } catch (err) {
+    console.error('❌ Erreur demande propriétaire:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/owners/status', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users').doc(req.uid).get();
+    if (!snap.exists || snap.data().role !== 'owner') {
+      return res.status(404).json({ error: 'Aucune demande propriétaire trouvée' });
+    }
+    const d = snap.data();
+    res.json({ status: d.status, name: d.name, email: d.email });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/owners/receivers', verifyToken, verifyOwner, async (req, res) => {
+  try {
+    const snap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', req.uid)
+      .where('status', '==', 'active')
+      .get();
+    const receivers = snap.docs.map(d => ({
+      uid: d.id, name: d.data().name, phone: d.data().phone,
+      email: d.data().email, balance: d.data().balance || 0, createdAt: d.data().createdAt
+    }));
+    res.json({ receivers });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/owners/receivers/pending', verifyToken, verifyOwner, async (req, res) => {
+  try {
+    const snap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', req.uid)
+      .where('status', '==', 'pending')
+      .get();
+    const pending = snap.docs.map(d => ({
+      uid: d.id, name: d.data().name, phone: d.data().phone,
+      email: d.data().email, createdAt: d.data().createdAt
+    }));
+    res.json({ pending });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/owners/receivers/:receiverUid/approve', verifyToken, verifyOwner, async (req, res) => {
+  const { receiverUid } = req.params;
+  try {
+    const receiverSnap = await db.collection('users').doc(receiverUid).get();
+    if (!receiverSnap.exists || receiverSnap.data().role !== 'receiver') {
+      return res.status(404).json({ error: 'Receveur introuvable' });
+    }
+    if (receiverSnap.data().ownerUid !== req.uid) {
+      return res.status(403).json({ error: 'Ce receveur ne vous appartient pas' });
+    }
+    await db.collection('users').doc(receiverUid).update({
+      status: 'active', approvedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    console.log(`✅ Receveur approuvé : ${receiverUid} par ${req.uid}`);
+    res.json({ message: 'Receveur approuvé avec succès' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/owners/receivers/:receiverUid/reject', verifyToken, verifyOwner, async (req, res) => {
+  const { receiverUid } = req.params;
+  const { reason } = req.body;
+  try {
+    const receiverSnap = await db.collection('users').doc(receiverUid).get();
+    if (!receiverSnap.exists || receiverSnap.data().role !== 'receiver') {
+      return res.status(404).json({ error: 'Receveur introuvable' });
+    }
+    if (receiverSnap.data().ownerUid !== req.uid) {
+      return res.status(403).json({ error: 'Ce receveur ne vous appartient pas' });
+    }
+    await db.collection('users').doc(receiverUid).update({
+      status: 'rejected', rejectReason: reason || '',
+      rejectedAt: admin.firestore.FieldValue.serverTimestamp(), rejectedBy: req.uid
+    });
+    console.log(`❌ Receveur refusé : ${receiverUid} par ${req.uid}`);
+    res.json({ message: 'Demande du receveur refusée' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/owners/revenues', verifyToken, verifyOwner, async (req, res) => {
+  try {
+    const receiversSnap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', req.uid)
+      .where('status', '==', 'active')
+      .get();
+    const revenues = [];
+    for (const receiverDoc of receiversSnap.docs) {
+      const receiverUid  = receiverDoc.id;
+      const receiverData = receiverDoc.data();
+      const histSnap = await db.collection('users').doc(receiverUid)
+        .collection('history')
+        .where('type', 'in', ['collect_offline', 'ticket'])
+        .get();
+      let total = 0, count = 0;
+      histSnap.docs.forEach(h => {
+        const amt = h.data().amount || 0;
+        if (amt > 0) { total += amt; count++; }
+      });
+      revenues.push({
+        uid: receiverUid, name: receiverData.name, phone: receiverData.phone,
+        balance: receiverData.balance || 0, totalEarned: total, tripCount: count
+      });
+    }
+    res.json({ revenues });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── RECEVEURS ──
+
+app.get('/api/receivers/owners', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users')
+      .where('role', '==', 'owner')
+      .where('status', '==', 'active')
+      .get();
+    const owners = snap.docs.map(d => ({
+      uid: d.id, name: d.data().name,
+      companyName: d.data().companyName || '',
+      busCount: d.data().busCount || 0, phone: d.data().phone
+    }));
+    res.json({ owners });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/receivers/request', verifyToken, limiter, async (req, res) => {
+  const uid = req.uid;
+  const { name, phone, email, ownerUid } = req.body;
+  if (!name || !phone || !email || !ownerUid) {
+    return res.status(400).json({ error: 'Nom, téléphone, email et propriétaire sont obligatoires' });
+  }
+  try {
+    const ownerSnap = await db.collection('users').doc(ownerUid).get();
+    if (!ownerSnap.exists || ownerSnap.data().role !== 'owner' || ownerSnap.data().status !== 'active') {
+      return res.status(404).json({ error: 'Propriétaire introuvable ou inactif' });
+    }
+    const existing = await db.collection('users').doc(uid).get();
+    if (existing.exists && existing.data().role === 'receiver') {
+      return res.status(409).json({ error: 'Vous avez déjà une demande en cours' });
+    }
+    await db.collection('users').doc(uid).set({
+      uid, name, phone, email, ownerUid,
+      ownerName: ownerSnap.data().name,
+      role:      'receiver',
+      status:    'pending',
+      balance:   0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    console.log(`📋 Demande receveur : ${uid} (${name}) → propriétaire ${ownerUid}`);
+    res.json({ message: 'Demande envoyée. En attente de validation par le propriétaire.' });
+  } catch (err) {
+    console.error('❌ Erreur demande receveur:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/receivers/status', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users').doc(req.uid).get();
+    if (!snap.exists || snap.data().role !== 'receiver') {
+      return res.status(404).json({ error: 'Aucune demande receveur trouvée' });
+    }
+    const d = snap.data();
+    res.json({
+      status: d.status, name: d.name, ownerName: d.ownerName,
+      ownerUid: d.ownerUid, rejectReason: d.rejectReason || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMINISTRATEUR ──
+
+app.get('/api/admin/owners', verifyToken, verifyAdmin, async (req, res) => {
+  const { status } = req.query;
+  try {
+    let query = db.collection('users').where('role', '==', 'owner');
+    if (status) query = query.where('status', '==', status);
+    const snap = await query.get();
+    const owners = snap.docs.map(d => ({
+      uid: d.id, name: d.data().name, phone: d.data().phone, email: d.data().email,
+      companyName: d.data().companyName || '', busCount: d.data().busCount || 0,
+      status: d.data().status, createdAt: d.data().createdAt
+    }));
+    res.json({ owners, total: owners.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/owners/:ownerUid/approve', verifyToken, verifyAdmin, async (req, res) => {
+  const { ownerUid } = req.params;
+  try {
+    const ownerSnap = await db.collection('users').doc(ownerUid).get();
+    if (!ownerSnap.exists || ownerSnap.data().role !== 'owner') {
+      return res.status(404).json({ error: 'Propriétaire introuvable' });
+    }
+    await db.collection('users').doc(ownerUid).update({
+      status: 'active', approvedAt: admin.firestore.FieldValue.serverTimestamp(), approvedBy: req.uid
+    });
+    console.log(`✅ Propriétaire approuvé par admin : ${ownerUid}`);
+    res.json({ message: 'Propriétaire approuvé avec succès' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/owners/:ownerUid/reject', verifyToken, verifyAdmin, async (req, res) => {
+  const { ownerUid } = req.params;
+  const { reason } = req.body;
+  try {
+    const ownerSnap = await db.collection('users').doc(ownerUid).get();
+    if (!ownerSnap.exists || ownerSnap.data().role !== 'owner') {
+      return res.status(404).json({ error: 'Propriétaire introuvable' });
+    }
+    await db.collection('users').doc(ownerUid).update({
+      status: 'rejected', rejectReason: reason || '',
+      rejectedAt: admin.firestore.FieldValue.serverTimestamp(), rejectedBy: req.uid
+    });
+    console.log(`❌ Propriétaire refusé par admin : ${ownerUid}`);
+    res.json({ message: 'Propriétaire refusé' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const [ownersSnap, receiversSnap, passengersSnap, txSnap] = await Promise.all([
+      db.collection('users').where('role', '==', 'owner').get(),
+      db.collection('users').where('role', '==', 'receiver').get(),
+      db.collection('users').where('role', '==', 'passenger').get(),
+      db.collection('paytech_transactions').where('status', '==', 'credited').get()
+    ]);
+    const ownersByStatus = { pending: 0, active: 0, rejected: 0 };
+    ownersSnap.docs.forEach(d => {
+      const s = d.data().status || 'pending';
+      ownersByStatus[s] = (ownersByStatus[s] || 0) + 1;
+    });
+    const receiversByStatus = { pending: 0, active: 0, rejected: 0 };
+    receiversSnap.docs.forEach(d => {
+      const s = d.data().status || 'pending';
+      receiversByStatus[s] = (receiversByStatus[s] || 0) + 1;
+    });
+    let totalVolume = 0;
+    txSnap.docs.forEach(d => { totalVolume += d.data().amount || 0; });
+    res.json({
+      owners:       { total: ownersSnap.size,    ...ownersByStatus },
+      receivers:    { total: receiversSnap.size, ...receiversByStatus },
+      passengers:   { total: passengersSnap.size },
+      transactions: { total: txSnap.size, totalVolume }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/owners/:ownerUid', verifyToken, verifyAdmin, async (req, res) => {
+  const { ownerUid } = req.params;
+  try {
+    const batch = db.batch();
+    const receiversSnap = await db.collection('users')
+      .where('role', '==', 'receiver')
+      .where('ownerUid', '==', ownerUid)
+      .get();
+    receiversSnap.docs.forEach(d => {
+      batch.update(d.ref, { status: 'suspended', suspendedAt: admin.firestore.FieldValue.serverTimestamp() });
+    });
+    batch.delete(db.collection('users').doc(ownerUid));
+    await batch.commit();
+    console.log(`🗑️ Propriétaire supprimé par admin : ${ownerUid} | ${receiversSnap.size} receveur(s) suspendus`);
+    res.json({ message: 'Propriétaire supprimé', receiversSuspended: receiversSnap.size });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PROFIL UTILISATEUR ──
+
+app.get('/api/profile', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('users').doc(req.uid).get();
+    if (!snap.exists) return res.status(404).json({ error: 'Profil introuvable' });
+    res.json(snap.data());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/profile/history', verifyToken, async (req, res) => {
+  const limit = parseInt(req.query.limit) || 20;
+  try {
+    const snap = await db.collection('users').doc(req.uid)
+      .collection('history')
+      .orderBy('ts', 'desc')
+      .limit(limit)
+      .get();
+    const history = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── DÉMARRAGE SERVEUR ──
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ TataPay Backend démarré — port ${PORT} | env: ${PAYTECH_ENV}`);
   console.log('🔒 Sécurité : CORS ✓ | Rate Limit ✓ | Token Firebase ✓ | Validation montant ✓');
+  console.log('👤 Rôles    : Admin ✓ | Propriétaire ✓ | Receveur ✓');
+  console.log('💸 Retrait  : /api/withdraw (fund call PayTech) ✓');
+
+  // Keep-alive toutes les 9 minutes
   setInterval(() => {
-    https.get('https://tatapay-backend-1.onrender.com/ping', () => {}).on('error', () => {});
+    https.get('https://tatapay-backend-1.onrender.com/ping', () => {})
+         .on('error', () => {});
   }, 9 * 60 * 1000);
   console.log('🔁 Keep-alive activé — ping toutes les 9 minutes');
 });
