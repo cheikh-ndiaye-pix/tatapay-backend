@@ -131,7 +131,7 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
     uid,
     amount: amt,
     type:      type,
-    method:    method || 'wave',
+    method:    method || null,
     meta:      meta || null,
     status:    'pending',
     createdAt: admin.firestore.FieldValue.serverTimestamp()
@@ -155,9 +155,15 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
     cancel_url:      'https://tatapay-a4972.web.app/cancel.html',
     sender_phone:    phone || '',
     sender_country:  'SN',
-    channel:         method || 'wave',
     custom_field:    JSON.stringify({ uid, type, ref: refCommand })
   };
+
+  // On ne fixe le "channel" que si un opérateur précis a été explicitement choisi.
+  // Sans channel, PayTech affiche lui-même son écran de sélection d'opérateur
+  // (Wave / Orange Money / Free Money) — c'est le comportement voulu par défaut.
+  if (method) {
+    payload.channel = method;
+  }
 
   try {
     const fetch = await import('node-fetch');
@@ -741,7 +747,7 @@ app.post('/api/owners/receivers/:receiverUid/reject', verifyToken, verifyOwner, 
     }
     await db.collection('users').doc(receiverUid).update({
       status: 'rejected', rejectReason: reason || '',
-      rejectedAt: admin.firestore.FieldValue.serverTimestamp()
+      rejectedAt: admin.firestore.FieldValue.serverTimestamp(), rejectedBy: req.uid
     });
     console.log(`❌ Receveur refusé : ${receiverUid} par ${req.uid}`);
     res.json({ message: 'Demande du receveur refusée' });
