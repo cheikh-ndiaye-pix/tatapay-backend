@@ -7,14 +7,28 @@ const rateLimit = require('express-rate-limit');
 const app       = express();
 
 // ── CORS SÉCURISÉ ──
+const ALLOWED_ORIGINS = [
+  'https://tatapay-a4972.web.app',
+  'https://tatapay-a4972.firebaseapp.com',
+  'https://tatapay-frontend.vercel.app',
+  'http://localhost:8081',
+  'http://localhost:19006',
+  'exp://192.168.1.91:8081'
+];
+// Autorise aussi tous les déploiements de preview Vercel du même projet
+// (ex: tatapay-frontend-git-abc123.vercel.app)
+const VERCEL_PREVIEW_REGEX = /^https:\/\/tatapay-frontend(-[a-z0-9-]+)?\.vercel\.app$/;
+
 app.use(cors({
-  origin: [
-    'https://tatapay-a4972.web.app',
-    'https://tatapay-a4972.firebaseapp.com',
-    'http://localhost:8081',
-    'http://localhost:19006',
-    'exp://192.168.1.91:8081'
-  ]
+  origin: function (origin, callback) {
+    // Requêtes sans origin (ex: curl, apps mobiles natives) : autorisées
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin) || VERCEL_PREVIEW_REGEX.test(origin)) {
+      return callback(null, true);
+    }
+    console.error('❌ CORS refusé pour origine:', origin);
+    return callback(new Error('Non autorisé par CORS'));
+  }
 }));
 
 app.use(express.json());
@@ -222,14 +236,12 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
   const externalId = 'TTW-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
   try {
-    // Vérifier solde suffisant
     const userSnap = await db.collection('users').doc(uid).get();
     if (!userSnap.exists) return res.status(404).json({ error: 'Utilisateur introuvable' });
 
     const balance = userSnap.data().balance || 0;
     if (balance < amt) return res.status(400).json({ error: 'Solde insuffisant' });
 
-    // Appel PayTech Transfer API
     const payload = {
       amount:             amt,
       destination_number: phone,
@@ -260,7 +272,6 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
     }
 
     if (data.success === 1) {
-      // Décrémenter solde + enregistrer historique
       const histRef = db.collection('users').doc(uid).collection('history').doc();
       await db.runTransaction(async (t) => {
         t.update(db.collection('users').doc(uid), {
@@ -313,7 +324,6 @@ app.post('/api/transfer-callback', async (req, res) => {
       api_secret_sha256
     } = req.body;
 
-    // Vérification signature
     const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
     const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
 
@@ -324,10 +334,8 @@ app.post('/api/transfer-callback', async (req, res) => {
 
     if (type_event === 'transfer_success') {
       console.log(`✅ Transfer confirmé : ${id_transfer} — ${amount} FCFA → ${destination_number}`);
-      // Optionnel : mettre à jour le statut dans l'historique
     } else if (type_event === 'transfer_failed') {
       console.error(`❌ Transfer échoué : ${id_transfer}`);
-      // Optionnel : rembourser le solde si nécessaire
     }
 
     res.status(200).send('OK');
@@ -405,9 +413,8 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
       }
 
       else if (type === 'ticket' && meta) {
-        // ── CALCUL COMMISSION 2% ──
-        const commission    = Math.round(amount * COMMISSION_RATE); // 2% pour TataPay
-        const receiverAmt   = amount - commission;                  // Ce que reçoit le receveur
+        const commission    = Math.round(amount * COMMISSION_RATE);
+        const receiverAmt   = amount - commission;
 
         const pendingRef    = db.collection('pending').doc();
         const receiverRef   = db.collection('users').doc(meta.busUid);
@@ -416,7 +423,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
         const adminHistRef  = db.collection('users').doc(ADMIN_UID).collection('history').doc();
         const commHistRef   = db.collection('commissions').doc();
 
-        // Enregistrement du ticket
         t.set(pendingRef, {
           busUid: meta.busUid, busId: meta.busId,
           passengerUid: uid, passengerId: meta.passengerId,
@@ -431,7 +437,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
           status: 'pending'
         });
 
-        // Débit passager
         t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
         t.set(histRef, {
           type: 'ticket',
@@ -440,7 +445,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
           ts: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // Crédit receveur (montant - commission)
         t.update(receiverRef, { balance: admin.firestore.FieldValue.increment(receiverAmt) });
         t.set(recvHistRef, {
           type: 'collect',
@@ -449,7 +453,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
           ts: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // Crédit admin (commission TataPay)
         if (ADMIN_UID) {
           t.update(adminRef, { balance: admin.firestore.FieldValue.increment(commission) });
           t.set(adminHistRef, {
@@ -460,7 +463,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
           });
         }
 
-        // Log commission séparé
         t.set(commHistRef, {
           ref: ref_command, amount, commission, receiverAmt,
           rate: COMMISSION_RATE, receiverUid: meta.busUid,
@@ -631,7 +633,6 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
   console.log(`📊 Sync : ${synced} acceptées, ${rejected} rejetées`);
   res.json({ results, synced, rejected });
 });
-
 
 // ════════════════════════════════════════════════════════════
 // ── GESTION DES COMPTES ──
@@ -994,7 +995,6 @@ app.listen(PORT, () => {
   console.log('👤 Rôles    : Admin ✓ | Propriétaire ✓ | Receveur ✓');
   console.log('💸 Retrait  : /api/withdraw (fund call PayTech) ✓');
 
-  // Keep-alive toutes les 9 minutes
   setInterval(() => {
     https.get('https://tatapay-backend-1.onrender.com/ping', () => {})
          .on('error', () => {});
