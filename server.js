@@ -38,9 +38,25 @@ app.use(express.urlencoded({ extended: true }));
 const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY    || '').trim();
 const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
 const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
-const OFFLINE_SECRET     = (process.env.OFFLINE_SECRET || 'tatapay-offline-secret-2026').trim();
+// ⚠️ SÉCURITÉ : plus de valeur par défaut codée en dur. Si OFFLINE_SECRET n'est pas
+// définie sur Render, les routes de paiement hors-ligne sont désactivées (503) au lieu
+// d'utiliser silencieusement un secret visible dans le code source.
+const OFFLINE_SECRET     = (process.env.OFFLINE_SECRET || '').trim();
+if (!OFFLINE_SECRET) {
+  console.error('🚨 OFFLINE_SECRET n\'est pas définie — les routes /api/offline/* sont désactivées.');
+  console.error('   Configure une valeur aléatoire longue dans les variables d\'environnement Render.');
+}
 const ADMIN_UID          = (process.env.ADMIN_UID || '').trim();
 const COMMISSION_RATE    = 0.02; // 2% commission TataPay sur chaque ticket
+const MAX_OFFLINE_PER_QR = 1000; // Plafond total cumulé de transactions hors-ligne par QR émis
+
+// Bloque toute route hors-ligne si le secret n'est pas configuré.
+const requireOfflineSecret = (req, res, next) => {
+  if (!OFFLINE_SECRET) {
+    return res.status(503).json({ error: 'Paiement hors-ligne indisponible (configuration serveur manquante)' });
+  }
+  next();
+};
 
 // ── FIREBASE ──
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -499,7 +515,7 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
 });
 
 // ── GÉNÉRER QR SIGNÉ HORS-LIGNE ──
-app.post('/api/offline/qr', verifyToken, limiter, async (req, res) => {
+app.post('/api/offline/qr', verifyToken, requireOfflineSecret, limiter, async (req, res) => {
   const uid = req.uid;
   try {
     const userSnap = await db.collection('users').doc(uid).get();
@@ -521,7 +537,7 @@ app.post('/api/offline/qr', verifyToken, limiter, async (req, res) => {
       .digest('hex');
 
     console.log(`✅ QR offline : ${uid} | solde: ${payload.balance} FCFA`);
-    res.json({ payload, signature });
+    res.json({ payload, signature, maxOffline: MAX_OFFLINE_PER_QR });
 
   } catch (err) {
     console.error('❌ Erreur QR offline:', err);
@@ -530,7 +546,7 @@ app.post('/api/offline/qr', verifyToken, limiter, async (req, res) => {
 });
 
 // ── VÉRIFIER QR HORS-LIGNE ──
-app.post('/api/offline/verify', async (req, res) => {
+app.post('/api/offline/verify', requireOfflineSecret, async (req, res) => {
   const { payload, signature } = req.body;
   if (!payload || !signature) return res.status(400).json({ error: 'Données manquantes' });
 
@@ -542,16 +558,23 @@ app.post('/api/offline/verify', async (req, res) => {
 
     const valid      = expectedSig === signature;
     const expired    = Date.now() > payload.expiresAt;
-    const maxOffline = 1000;
 
-    res.json({ valid, expired, maxOffline });
+    res.json({ valid, expired, maxOffline: MAX_OFFLINE_PER_QR });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // ── SYNC TRANSACTIONS HORS-LIGNE ──
-app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
+// ⚠️ SÉCURITÉ : la signature ne couvre que l'identité du passager (uid, solde au moment de
+// l'émission), PAS le montant ni le destinataire de chaque vente — c'est voulu, un même QR
+// journalier sert à plusieurs achats chez plusieurs receveurs différents pendant la période
+// hors-ligne. Le vrai plafond de sécurité est donc un plafond CUMULÉ par QR émis (identifié
+// par uid+issuedAt), et non plus seulement un plafond par transaction individuelle : avant ce
+// correctif, un même QR capturé une fois pouvait être rejoué avec des syncRef différents pour
+// vider tout le solde du passager, tant que chaque sync restait sous 1000 F. Le plafond cumulé
+// (MAX_OFFLINE_PER_QR) est maintenant appliqué et suivi dans offline_qr_sessions/{sessionKey}.
+app.post('/api/offline/sync', verifyToken, requireOfflineSecret, limiter, async (req, res) => {
   const { transactions } = req.body;
   if (!transactions || !Array.isArray(transactions)) {
     return res.status(400).json({ error: 'Tableau de transactions manquant' });
@@ -578,8 +601,8 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
         continue;
       }
 
-      if (price > 1000) {
-        results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA' });
+      if (!price || price > 1000) {
+        results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA par transaction' });
         continue;
       }
 
@@ -589,18 +612,36 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
         continue;
       }
 
-      const passengerRef  = db.collection('users').doc(payload.uid);
-      const passengerSnap = await passengerRef.get();
-      if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
-        results.push({ syncRef, status: 'rejected', reason: 'Solde insuffisant' });
-        continue;
-      }
+      // Session = un même QR émis (identité + date d'émission). Sert à plafonner le cumul
+      // total débité sur ce QR, pas seulement chaque transaction individuellement.
+      const sessionKey = `${payload.uid}_${payload.issuedAt}`;
+      const sessionRef = db.collection('offline_qr_sessions').doc(sessionKey);
 
-      const receiverRef = db.collection('users').doc(receiverUid);
-      const passHistRef = db.collection('users').doc(payload.uid).collection('history').doc();
-      const recvHistRef = db.collection('users').doc(receiverUid).collection('history').doc();
+      const passengerRef  = db.collection('users').doc(payload.uid);
+      const receiverRef   = db.collection('users').doc(receiverUid);
+      const passHistRef   = db.collection('users').doc(payload.uid).collection('history').doc();
+      const recvHistRef   = db.collection('users').doc(receiverUid).collection('history').doc();
+      const offlineTxRef  = db.collection('offline_transactions').doc(syncRef);
+
+      let rejection = null;
 
       await db.runTransaction(async (t) => {
+        const [passengerSnap, sessionSnap] = await Promise.all([
+          t.get(passengerRef),
+          t.get(sessionRef)
+        ]);
+
+        if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
+          rejection = 'Solde insuffisant';
+          return;
+        }
+
+        const alreadySpent = sessionSnap.exists ? (sessionSnap.data().totalSpent || 0) : 0;
+        if (alreadySpent + price > MAX_OFFLINE_PER_QR) {
+          rejection = `Plafond hors-ligne dépassé (max ${MAX_OFFLINE_PER_QR} F par QR, ${alreadySpent} F déjà utilisés)`;
+          return;
+        }
+
         t.update(passengerRef, { balance: admin.firestore.FieldValue.increment(-price) });
         t.set(passHistRef, {
           type: 'ticket_offline', label: `Ticket hors-ligne — ${syncRef}`,
@@ -613,11 +654,21 @@ app.post('/api/offline/sync', verifyToken, limiter, async (req, res) => {
           amount: price, ref: syncRef,
           ts: admin.firestore.FieldValue.serverTimestamp()
         });
-        t.set(db.collection('offline_transactions').doc(syncRef), {
+        t.set(offlineTxRef, {
           passengerUid: payload.uid, receiverUid, price, syncRef,
           syncedAt: admin.firestore.FieldValue.serverTimestamp(), status: 'synced'
         });
+        t.set(sessionRef, {
+          uid: payload.uid, issuedAt: payload.issuedAt,
+          totalSpent: alreadySpent + price,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
       });
+
+      if (rejection) {
+        results.push({ syncRef, status: 'rejected', reason: rejection });
+        continue;
+      }
 
       results.push({ syncRef, status: 'synced' });
       console.log(`✅ Sync offline : ${payload.uid} -${price} FCFA → ${receiverUid}`);
@@ -992,6 +1043,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ TataPay Backend démarré — port ${PORT} | env: ${PAYTECH_ENV}`);
   console.log('🔒 Sécurité : CORS ✓ | Rate Limit ✓ | Token Firebase ✓ | Validation montant ✓');
+  console.log(`🔒 Offline   : secret ${OFFLINE_SECRET ? 'configuré ✓' : 'MANQUANT ⚠️ (routes désactivées)'} | plafond cumulé ${MAX_OFFLINE_PER_QR} F/QR`);
   console.log('👤 Rôles    : Admin ✓ | Propriétaire ✓ | Receveur ✓');
   console.log('💸 Retrait  : /api/withdraw (fund call PayTech) ✓');
 
