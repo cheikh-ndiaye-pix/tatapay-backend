@@ -3,7 +3,9 @@
 // Nécessite la variable d'environnement GEMINI_API_KEY sur Render.
 // Clé gratuite sans carte bancaire : aistudio.google.com
 // ════════════════════════════════════════════════════════════
+const rateLimit = require('express-rate-limit');
 const { GoogleGenAI } = require('@google/genai');
+
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 let genAI = null;
 if (!GEMINI_API_KEY) {
