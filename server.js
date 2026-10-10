@@ -392,6 +392,28 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
   }
 });
 
+// ── ADMIN : lister les retraits (par défaut : ceux à traiter à la main ; status=all pour tout) ──
+app.get('/api/admin/payouts', verifyToken, verifyAdmin, async (req, res) => {
+  const status = String(req.query.status || 'pending_manual');
+  try {
+    let q = db.collection('payouts');
+    if (status !== 'all') q = q.where('status', '==', status);
+    const snap = await q.get();
+    const payouts = snap.docs.map(d => {
+      const p = d.data();
+      return {
+        id: d.id, name: p.name || '', walletId: p.walletId || '',
+        phone: p.phone, amount: p.amount, service: p.service, status: p.status,
+        createdAt: p.createdAt && p.createdAt.toMillis ? p.createdAt.toMillis() : null
+      };
+    }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    res.json({ payouts, total: payouts.length, mode: PAYOUT_MODE });
+  } catch (err) {
+    console.error('❌ payouts list:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // ── ADMIN : traiter les retraits manuels ──
 app.post('/api/admin/payouts/:id/done', verifyToken, verifyAdmin, async (req, res) => {
   const ref = db.collection('payouts').doc(req.params.id);
@@ -1181,7 +1203,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ TataPay Backend démarré — port ${PORT} | env: ${PAYTECH_ENV}`);
   console.log(`🔒 Offline   : secret ${OFFLINE_SECRET ? 'configuré ✓' : 'MANQUANT ⚠️ (routes désactivées)'} | plafond cumulé ${MAX_OFFLINE_PER_QR} F/QR`);
-  console.log('💸 Retrait  : /api/withdraw (réservation atomique + remboursement auto) ✓');
+  console.log(`💸 Retrait  : /api/withdraw (mode ${PAYOUT_MODE}) — réservation atomique + remboursement auto ✓`);
 
   setInterval(() => {
     https.get('https://tatapay-backend-1.onrender.com/ping', () => {})
