@@ -40,6 +40,9 @@ if (!OFFLINE_SECRET) {
   console.error('🚨 OFFLINE_SECRET n\'est pas définie — les routes /api/offline/* sont désactivées.');
 }
 const ADMIN_UID          = (process.env.ADMIN_UID || '').trim();
+// PAYOUT_MODE : 'paytech' (envoi automatique via PayTech) ou 'manual'
+// (le montant est réservé, l'admin envoie lui-même sur Wave puis valide).
+const PAYOUT_MODE        = (process.env.PAYOUT_MODE || 'paytech').trim();
 const COMMISSION_RATE    = 0.02;
 const MAX_OFFLINE_PER_QR = 1000;
 
@@ -315,7 +318,9 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
       t.update(userRef, { balance: FV.increment(-amt) });
       t.set(payoutRef, {
         uid, amount: amt, phone: cleanPhone, service,
-        status: 'processing', createdAt: FV.serverTimestamp()
+        name: u.name || '', walletId: u.walletId || '',
+        status: PAYOUT_MODE === 'manual' ? 'pending_manual' : 'processing',
+        createdAt: FV.serverTimestamp()
       });
       t.set(userRef.collection('history').doc(), {
         type: 'withdraw',
@@ -328,6 +333,12 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
     // Requête déjà traitée : on renvoie simplement l'état actuel
     if (!reservation.created) {
       return res.json({ message: 'Demande déjà enregistrée', ref: payoutId, status: reservation.payout.status });
+    }
+
+    // Mode manuel : pas d'appel PayTech, l'admin envoie l'argent depuis Wave
+    if (PAYOUT_MODE === 'manual') {
+      console.log(`📝 Retrait manuel en attente : ${uid} -${amt} FCFA → ${cleanPhone}`);
+      return res.json({ message: 'Demande enregistrée, envoi en cours de traitement', ref: payoutId, status: 'pending' });
     }
 
     // 2) Appel PayTech
@@ -378,6 +389,38 @@ app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
   } catch (err) {
     console.error('❌ Erreur retrait:', err.message);
     return res.status(err.http || 500).json({ error: err.http ? err.message : 'Erreur serveur' });
+  }
+});
+
+// ── ADMIN : traiter les retraits manuels ──
+app.post('/api/admin/payouts/:id/done', verifyToken, verifyAdmin, async (req, res) => {
+  const ref = db.collection('payouts').doc(req.params.id);
+  try {
+    const ok = await db.runTransaction(async (t) => {
+      const snap = await t.get(ref);
+      if (!snap.exists || snap.data().status !== 'pending_manual') return false;
+      t.update(ref, { status: 'success', doneAt: FV.serverTimestamp(), doneBy: req.uid });
+      return true;
+    });
+    if (!ok) return res.status(409).json({ error: 'Retrait déjà traité ou introuvable' });
+    res.json({ message: 'Retrait marqué comme envoyé' });
+  } catch (err) {
+    console.error('❌ payout done:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/api/admin/payouts/:id/reject', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const snap = await db.collection('payouts').doc(req.params.id).get();
+    if (!snap.exists || snap.data().status !== 'pending_manual') {
+      return res.status(409).json({ error: 'Retrait déjà traité ou introuvable' });
+    }
+    const r = await refundPayout(req.params.id, 'refusé par admin');
+    res.json({ message: r.refunded ? 'Retrait refusé et remboursé' : 'Déjà traité' });
+  } catch (err) {
+    console.error('❌ payout reject:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
