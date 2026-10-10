@@ -42,7 +42,7 @@ if (!OFFLINE_SECRET) {
 const ADMIN_UID          = (process.env.ADMIN_UID || '').trim();
 // PAYOUT_MODE : 'paytech' (envoi automatique via PayTech) ou 'manual'
 // (le montant est réservé, l'admin envoie lui-même sur Wave puis valide).
-const PAYOUT_MODE        = (process.env.PAYOUT_MODE || 'paytech').trim();
+const PAYOUT_MODE        = (process.env.PAYOUT_MODE || 'manual').trim().toLowerCase() === 'paytech' ? 'paytech' : 'manual';
 const COMMISSION_RATE    = 0.02;
 const MAX_OFFLINE_PER_QR = 1000;
 
@@ -140,7 +140,7 @@ const validateAmount = (amount) => {
 // ════════════════════════════════════════════════════════════
 
 app.get('/', (req, res) => {
-  res.json({ message: 'TataPay Backend is running!', paytech_env: PAYTECH_ENV });
+  res.json({ message: 'TataPay Backend is running!', paytech_env: PAYTECH_ENV, payout_mode: PAYOUT_MODE, version: 'payout-manual-v2' });
 });
 
 app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date() }));
