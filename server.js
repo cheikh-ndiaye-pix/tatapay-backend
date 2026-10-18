@@ -35,18 +35,33 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ── VARIABLES D'ENVIRONNEMENT ──
-const PAYTECH_API_KEY    = (process.env.PAYTECH_API_KEY    || '').trim();
-const PAYTECH_API_SECRET = (process.env.PAYTECH_API_SECRET || '').trim();
-const PAYTECH_ENV        = (process.env.PAYTECH_ENV || 'test').trim();
+// clean() enlève les espaces, retours à la ligne et guillemets collés par erreur
+// autour des valeurs lors du copier-coller dans Render.
+const clean = (v) => (v || '').toString().trim().replace(/^["']+|["']+$/g, '').trim();
+
+const PAYTECH_API_KEY    = clean(process.env.PAYTECH_API_KEY);
+const PAYTECH_API_SECRET = clean(process.env.PAYTECH_API_SECRET);
+// PayTech n'accepte que "test" ou "prod". On accepte aussi "production" / "live".
+const rawEnv      = clean(process.env.PAYTECH_ENV).toLowerCase();
+const PAYTECH_ENV = ['prod', 'production', 'live'].includes(rawEnv) ? 'prod' : 'test';
+
+console.log(
+  '🔑 PayTech — clé:',
+  PAYTECH_API_KEY ? PAYTECH_API_KEY.slice(0, 4) + '… (' + PAYTECH_API_KEY.length + ' car.)' : 'MANQUANTE ⚠️',
+  '| secret:',
+  PAYTECH_API_SECRET ? '(' + PAYTECH_API_SECRET.length + ' car.)' : 'MANQUANT ⚠️',
+  '| env:', PAYTECH_ENV
+);
+
 // ⚠️ SÉCURITÉ : plus de valeur par défaut codée en dur. Si OFFLINE_SECRET n'est pas
 // définie sur Render, les routes de paiement hors-ligne sont désactivées (503) au lieu
 // d'utiliser silencieusement un secret visible dans le code source.
-const OFFLINE_SECRET     = (process.env.OFFLINE_SECRET || '').trim();
+const OFFLINE_SECRET     = clean(process.env.OFFLINE_SECRET);
 if (!OFFLINE_SECRET) {
   console.error('🚨 OFFLINE_SECRET n\'est pas définie — les routes /api/offline/* sont désactivées.');
   console.error('   Configure une valeur aléatoire longue dans les variables d\'environnement Render.');
 }
-const ADMIN_UID          = (process.env.ADMIN_UID || '').trim();
+const ADMIN_UID          = clean(process.env.ADMIN_UID);
 const COMMISSION_RATE    = 0.02; // 2% commission TataPay sur chaque ticket
 const MAX_OFFLINE_PER_QR = 1000; // Plafond total cumulé de transactions hors-ligne par QR émis
 
@@ -128,20 +143,33 @@ const validateAmount = (amount) => {
   return amt;
 };
 
+// ── Bloque les routes PayTech si les clés ne sont pas configurées ──
+const requirePaytechKeys = (req, res, next) => {
+  if (!PAYTECH_API_KEY || !PAYTECH_API_SECRET) {
+    console.error('🚨 Clés PayTech manquantes (PAYTECH_API_KEY / PAYTECH_API_SECRET).');
+    return res.status(503).json({ error: 'Clé API PayTech manquante sur le serveur (configuration à vérifier)' });
+  }
+  next();
+};
+
 // ════════════════════════════════════════════════════════════
 // ── ROUTES ──
 // ════════════════════════════════════════════════════════════
 
 // ── ROUTE TEST ──
 app.get('/', (req, res) => {
-  res.json({ message: 'TataPay Backend is running!', paytech_env: PAYTECH_ENV });
+  res.json({
+    message: 'TataPay Backend is running!',
+    paytech_env: PAYTECH_ENV,
+    paytech_keys: (PAYTECH_API_KEY && PAYTECH_API_SECRET) ? 'configurées' : 'MANQUANTES'
+  });
 });
 
 // ── KEEP-ALIVE PING ──
 app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date() }));
 
 // ── INIT PAIEMENT PAYTECH ──
-app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
+app.post('/api/payment/init', verifyToken, limiter, requirePaytechKeys, async (req, res) => {
   const { amount, phone, method, type, meta } = req.body;
   const uid = req.uid;
 
@@ -190,7 +218,7 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
 
   // On ne fixe le "channel" que si un opérateur précis a été explicitement choisi.
   // Sans channel, PayTech affiche lui-même son écran de sélection d'opérateur
-  // (Wave / Orange Money / Free Money) — c'est le comportement voulu par défaut.
+  // (Orange Money / Wave / Mixx by Yas…) — c'est le comportement voulu par défaut.
   if (method) {
     payload.channel = method;
   }
@@ -215,6 +243,7 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
     try {
       data = JSON.parse(rawText);
     } catch (e) {
+      await db.collection('paytech_transactions').doc(refCommand).delete();
       return res.status(502).json({ error: 'Réponse non-JSON de PayTech', raw: rawText.slice(0, 500) });
     }
 
@@ -223,11 +252,13 @@ app.post('/api/payment/init', verifyToken, limiter, async (req, res) => {
       res.json({ payment_url: url, redirect_url: url, ref_command: refCommand });
     } else {
       await db.collection('paytech_transactions').doc(refCommand).delete();
+      console.error('❌ PayTech a refusé la demande:', data);
       res.status(500).json({ error: data.message || 'Erreur PayTech', details: data });
     }
 
   } catch (error) {
     console.error('❌ Erreur init paiement:', error);
+    await db.collection('paytech_transactions').doc(refCommand).delete().catch(() => {});
     res.status(500).json({ error: error.message });
   }
 });
@@ -240,7 +271,7 @@ const SERVICE_MAP = {
 };
 
 // ── RETRAIT RÉEL VIA PAYTECH TRANSFER API ──
-app.post('/api/withdraw', verifyToken, limiter, async (req, res) => {
+app.post('/api/withdraw', verifyToken, limiter, requirePaytechKeys, async (req, res) => {
   const { amount, phone, method } = req.body;
   const uid = req.uid;
 
@@ -1045,7 +1076,7 @@ app.get('/api/profile/history', verifyToken, async (req, res) => {
 // ════════════════════════════════════════════════════════════
 const { GoogleGenAI } = require('@google/genai');
 
-const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
+const GEMINI_API_KEY = clean(process.env.GEMINI_API_KEY);
 let genAI = null;
 if (!GEMINI_API_KEY) {
   console.error('🚨 GEMINI_API_KEY n\'est pas définie — la route /api/assistant est désactivée.');
