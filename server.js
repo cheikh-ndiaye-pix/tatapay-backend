@@ -2,9 +2,11 @@ const express   = require('express');
 const cors      = require('cors');
 const admin     = require('firebase-admin');
 const crypto    = require('crypto');
-const https     = require('https');
 const rateLimit = require('express-rate-limit');
 const app       = express();
+
+// ── VERCEL : derrière un proxy (nécessaire pour le rate limiting par IP) ──
+app.set('trust proxy', 1);
 
 // ── CORS SÉCURISÉ ──
 const ALLOWED_ORIGINS = [
@@ -16,12 +18,10 @@ const ALLOWED_ORIGINS = [
   'exp://192.168.1.91:8081'
 ];
 // Autorise aussi tous les déploiements de preview Vercel du même projet
-// (ex: tatapay-frontend-git-abc123.vercel.app)
 const VERCEL_PREVIEW_REGEX = /^https:\/\/tatapay-frontend(-[a-z0-9-]+)?\.vercel\.app$/;
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Requêtes sans origin (ex: curl, apps mobiles natives) : autorisées
     if (!origin) return callback(null, true);
     if (ALLOWED_ORIGINS.includes(origin) || VERCEL_PREVIEW_REGEX.test(origin)) {
       return callback(null, true);
@@ -34,14 +34,14 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// URL publique du backend (Vercel)
+const BACKEND_URL = 'https://tatapay-frontend.vercel.app';
+
 // ── VARIABLES D'ENVIRONNEMENT ──
-// clean() enlève les espaces, retours à la ligne et guillemets collés par erreur
-// autour des valeurs lors du copier-coller dans Render.
 const clean = (v) => (v || '').toString().trim().replace(/^["']+|["']+$/g, '').trim();
 
 const PAYTECH_API_KEY    = clean(process.env.PAYTECH_API_KEY);
 const PAYTECH_API_SECRET = clean(process.env.PAYTECH_API_SECRET);
-// PayTech n'accepte que "test" ou "prod". On accepte aussi "production" / "live".
 const rawEnv      = clean(process.env.PAYTECH_ENV).toLowerCase();
 const PAYTECH_ENV = ['prod', 'production', 'live'].includes(rawEnv) ? 'prod' : 'test';
 
@@ -53,19 +53,14 @@ console.log(
   '| env:', PAYTECH_ENV
 );
 
-// ⚠️ SÉCURITÉ : plus de valeur par défaut codée en dur. Si OFFLINE_SECRET n'est pas
-// définie sur Render, les routes de paiement hors-ligne sont désactivées (503) au lieu
-// d'utiliser silencieusement un secret visible dans le code source.
 const OFFLINE_SECRET     = clean(process.env.OFFLINE_SECRET);
 if (!OFFLINE_SECRET) {
   console.error('🚨 OFFLINE_SECRET n\'est pas définie — les routes /api/offline/* sont désactivées.');
-  console.error('   Configure une valeur aléatoire longue dans les variables d\'environnement Render.');
 }
 const ADMIN_UID          = clean(process.env.ADMIN_UID);
-const COMMISSION_RATE    = 0.02; // 2% commission TataPay sur chaque ticket
-const MAX_OFFLINE_PER_QR = 1000; // Plafond total cumulé de transactions hors-ligne par QR émis
+const COMMISSION_RATE    = 0.02;
+const MAX_OFFLINE_PER_QR = 1000;
 
-// Bloque toute route hors-ligne si le secret n'est pas configuré.
 const requireOfflineSecret = (req, res, next) => {
   if (!OFFLINE_SECRET) {
     return res.status(503).json({ error: 'Paiement hors-ligne indisponible (configuration serveur manquante)' });
@@ -73,9 +68,11 @@ const requireOfflineSecret = (req, res, next) => {
   next();
 };
 
-// ── FIREBASE ──
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+// ── FIREBASE (initialisation unique : Vercel réutilise les instances) ──
+if (!admin.apps.length) {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+}
 const db = admin.firestore();
 
 // ── RATE LIMITING ──
@@ -143,7 +140,6 @@ const validateAmount = (amount) => {
   return amt;
 };
 
-// ── Bloque les routes PayTech si les clés ne sont pas configurées ──
 const requirePaytechKeys = (req, res, next) => {
   if (!PAYTECH_API_KEY || !PAYTECH_API_SECRET) {
     console.error('🚨 Clés PayTech manquantes (PAYTECH_API_KEY / PAYTECH_API_SECRET).');
@@ -156,8 +152,7 @@ const requirePaytechKeys = (req, res, next) => {
 // ── ROUTES ──
 // ════════════════════════════════════════════════════════════
 
-// ── ROUTE TEST ──
-app.get('/', (req, res) => {
+app.get('/api', (req, res) => {
   res.json({
     message: 'TataPay Backend is running!',
     paytech_env: PAYTECH_ENV,
@@ -165,7 +160,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// ── KEEP-ALIVE PING ──
 app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date() }));
 
 // ── INIT PAIEMENT PAYTECH ──
@@ -208,7 +202,7 @@ app.post('/api/payment/init', verifyToken, limiter, requirePaytechKeys, async (r
     ref_command:     refCommand,
     command_name:    'TataPay Paiement',
     env:             PAYTECH_ENV,
-    ipn_url:         'https://tatapay-backend-1.onrender.com/api/ipn',
+    ipn_url:         BACKEND_URL + '/api/ipn',
     success_url:     'https://tatapay-a4972.web.app/success.html',
     cancel_url:      'https://tatapay-a4972.web.app/cancel.html',
     sender_phone:    phone || '',
@@ -216,16 +210,12 @@ app.post('/api/payment/init', verifyToken, limiter, requirePaytechKeys, async (r
     custom_field:    JSON.stringify({ uid, type, ref: refCommand })
   };
 
-  // On ne fixe le "channel" que si un opérateur précis a été explicitement choisi.
-  // Sans channel, PayTech affiche lui-même son écran de sélection d'opérateur
-  // (Orange Money / Wave / Mixx by Yas…) — c'est le comportement voulu par défaut.
   if (method) {
     payload.channel = method;
   }
 
   try {
-    const fetch = await import('node-fetch');
-    const response = await fetch.default('https://paytech.sn/api/payment/request-payment', {
+    const response = await fetch('https://paytech.sn/api/payment/request-payment', {
       method: 'POST',
       headers: {
         'API_KEY':      PAYTECH_API_KEY,
@@ -293,12 +283,11 @@ app.post('/api/withdraw', verifyToken, limiter, requirePaytechKeys, async (req, 
       amount:             amt,
       destination_number: phone,
       service:            service,
-      callback_url:       'https://tatapay-backend-1.onrender.com/api/transfer-callback',
+      callback_url:       BACKEND_URL + '/api/transfer-callback',
       external_id:        externalId
     };
 
-    const fetch = await import('node-fetch');
-    const response = await fetch.default('https://paytech.sn/api/transfer/transferFund', {
+    const response = await fetch('https://paytech.sn/api/transfer/transferFund', {
       method: 'POST',
       headers: {
         'API_KEY':      PAYTECH_API_KEY,
@@ -597,14 +586,7 @@ app.post('/api/offline/verify', requireOfflineSecret, async (req, res) => {
 });
 
 // ── SYNC TRANSACTIONS HORS-LIGNE ──
-// ⚠️ SÉCURITÉ : la signature ne couvre que l'identité du passager (uid, solde au moment de
-// l'émission), PAS le montant ni le destinataire de chaque vente — c'est voulu, un même QR
-// journalier sert à plusieurs achats chez plusieurs receveurs différents pendant la période
-// hors-ligne. Le vrai plafond de sécurité est donc un plafond CUMULÉ par QR émis (identifié
-// par uid+issuedAt), et non plus seulement un plafond par transaction individuelle : avant ce
-// correctif, un même QR capturé une fois pouvait être rejoué avec des syncRef différents pour
-// vider tout le solde du passager, tant que chaque sync restait sous 1000 F. Le plafond cumulé
-// (MAX_OFFLINE_PER_QR) est maintenant appliqué et suivi dans offline_qr_sessions/{sessionKey}.
+// Plafond cumulé par QR émis (uid+issuedAt), suivi dans offline_qr_sessions/{sessionKey}.
 app.post('/api/offline/sync', verifyToken, requireOfflineSecret, limiter, async (req, res) => {
   const { transactions } = req.body;
   if (!transactions || !Array.isArray(transactions)) {
@@ -643,8 +625,6 @@ app.post('/api/offline/sync', verifyToken, requireOfflineSecret, limiter, async 
         continue;
       }
 
-      // Session = un même QR émis (identité + date d'émission). Sert à plafonner le cumul
-      // total débité sur ce QR, pas seulement chaque transaction individuellement.
       const sessionKey = `${payload.uid}_${payload.issuedAt}`;
       const sessionRef = db.collection('offline_qr_sessions').doc(sessionKey);
 
@@ -1071,8 +1051,7 @@ app.get('/api/profile/history', verifyToken, async (req, res) => {
 
 // ════════════════════════════════════════════════════════════
 // ── ASSISTANT IA GRATUIT (Google Gemini) ──
-// Nécessite la variable d'environnement GEMINI_API_KEY sur Render.
-// Clé gratuite sans carte bancaire : aistudio.google.com
+// Nécessite la variable d'environnement GEMINI_API_KEY sur Vercel.
 // ════════════════════════════════════════════════════════════
 const { GoogleGenAI } = require('@google/genai');
 
@@ -1131,18 +1110,5 @@ app.post('/api/assistant', assistantLimiter, requireGeminiKey, async (req, res) 
   }
 });
 
-// ── DÉMARRAGE SERVEUR ──
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ TataPay Backend démarré — port ${PORT} | env: ${PAYTECH_ENV}`);
-  console.log('🔒 Sécurité : CORS ✓ | Rate Limit ✓ | Token Firebase ✓ | Validation montant ✓');
-  console.log(`🔒 Offline   : secret ${OFFLINE_SECRET ? 'configuré ✓' : 'MANQUANT ⚠️ (routes désactivées)'} | plafond cumulé ${MAX_OFFLINE_PER_QR} F/QR`);
-  console.log('👤 Rôles    : Admin ✓ | Propriétaire ✓ | Receveur ✓');
-  console.log('💸 Retrait  : /api/withdraw (fund call PayTech) ✓');
-
-  setInterval(() => {
-    https.get('https://tatapay-backend-1.onrender.com/ping', () => {})
-         .on('error', () => {});
-  }, 9 * 60 * 1000);
-  console.log('🔁 Keep-alive activé — ping toutes les 9 minutes');
-});
+// ── VERCEL : on exporte l'app (pas de app.listen, pas de keep-alive) ──
+module.exports = app;
