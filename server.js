@@ -53,6 +53,8 @@ console.log(
   '| env:', PAYTECH_ENV
 );
 
+// ── INTERRUPTEUR RETRAITS : tant que WITHDRAWALS_ENABLED n'est pas 'true', aucun virement réel ──
+const WITHDRAWALS_ENABLED = clean(process.env.WITHDRAWALS_ENABLED).toLowerCase() === 'true';
 const OFFLINE_SECRET     = clean(process.env.OFFLINE_SECRET);
 if (!OFFLINE_SECRET) {
   console.error('🚨 OFFLINE_SECRET n\'est pas définie — les routes /api/offline/* sont désactivées.');
@@ -172,9 +174,19 @@ app.post('/api/payment/init', verifyToken, limiter, requirePaytechKeys, async (r
     return res.status(400).json({ error: 'Montant invalide (min 100, max 500 000 FCFA)' });
   }
 
-  const allowedTypes = ['recharge', 'ticket', 'retrait'];
+  const allowedTypes = ['recharge', 'ticket'];
   if (!allowedTypes.includes(type)) {
     return res.status(400).json({ error: 'Type de paiement invalide' });
+  }
+
+  if (type === 'ticket') {
+    if (!meta || typeof meta.busUid !== 'string' || !meta.busUid || meta.busUid === uid) {
+      return res.status(400).json({ error: 'Receveur du ticket invalide' });
+    }
+    const busSnap = await db.collection('users').doc(meta.busUid).get();
+    if (!busSnap.exists || busSnap.data().role !== 'receiver') {
+      return res.status(400).json({ error: 'Receveur du ticket introuvable' });
+    }
   }
 
   const refCommand = 'TTP-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -261,87 +273,104 @@ const SERVICE_MAP = {
 };
 
 // ── RETRAIT RÉEL VIA PAYTECH TRANSFER API ──
+// Ordre sûr : 1) on RÉSERVE (débite) le montant dans une transaction,
+// 2) on appelle PayTech, 3) si PayTech refuse, on REMBOURSE.
+// Deux retraits simultanés ne peuvent donc jamais dépasser le solde.
 app.post('/api/withdraw', verifyToken, limiter, requirePaytechKeys, async (req, res) => {
+  if (!WITHDRAWALS_ENABLED) {
+    return res.status(503).json({ error: 'Retraits temporairement désactivés' });
+  }
   const { amount, phone, method } = req.body;
   const uid = req.uid;
 
   const amt = validateAmount(amount);
   if (!amt) return res.status(400).json({ error: 'Montant invalide (min 100, max 500 000 FCFA)' });
-  if (!phone) return res.status(400).json({ error: 'Numéro de téléphone requis' });
+  const cleanPhone = String(phone || '').replace(/\s+/g, '');
+  if (!/^\+?\d{8,15}$/.test(cleanPhone)) return res.status(400).json({ error: 'Numéro de téléphone invalide' });
+  if (!SERVICE_MAP[method]) return res.status(400).json({ error: 'Opérateur invalide' });
 
-  const service = SERVICE_MAP[method] || SERVICE_MAP['wave'];
-  const externalId = 'TTW-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  const service    = SERVICE_MAP[method];
+  const externalId = 'TTW-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+  const userRef    = db.collection('users').doc(uid);
+  const wdRef      = db.collection('withdrawals').doc(externalId);
+  const histRef    = userRef.collection('history').doc(externalId);
 
+  // 1) Réservation atomique
   try {
-    const userSnap = await db.collection('users').doc(uid).get();
-    if (!userSnap.exists) return res.status(404).json({ error: 'Utilisateur introuvable' });
+    await db.runTransaction(async (t) => {
+      const snap = await t.get(userRef);
+      if (!snap.exists) throw Object.assign(new Error('Utilisateur introuvable'), { http: 404 });
+      const u = snap.data();
+      if (!['approved', 'active'].includes(u.status)) throw Object.assign(new Error('Compte non validé'), { http: 403 });
+      if ((u.balance || 0) < amt) throw Object.assign(new Error('Solde insuffisant'), { http: 400 });
+      t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amt) });
+      t.set(wdRef, {
+        ownerUid: uid, ownerName: u.name || '', amount: amt, phone: cleanPhone,
+        operator: method, service, ref: externalId, status: 'reserved',
+        ts: admin.firestore.FieldValue.serverTimestamp()
+      });
+      t.set(histRef, {
+        type: 'withdraw', label: `Retrait ${service} — ${cleanPhone}`, amount: -amt,
+        ref: externalId, status: 'pending', ts: admin.firestore.FieldValue.serverTimestamp()
+      });
+    });
+  } catch (e) {
+    return res.status(e.http || 500).json({ error: e.message });
+  }
 
-    const balance = userSnap.data().balance || 0;
-    if (balance < amt) return res.status(400).json({ error: 'Solde insuffisant' });
-
-    const payload = {
-      amount:             amt,
-      destination_number: phone,
-      service:            service,
-      callback_url:       BACKEND_URL + '/api/transfer-callback',
-      external_id:        externalId
-    };
-
+  // 2) Virement PayTech
+  let data = null;
+  try {
     const response = await fetch('https://paytech.sn/api/transfer/transferFund', {
       method: 'POST',
-      headers: {
-        'API_KEY':      PAYTECH_API_KEY,
-        'API_SECRET':   PAYTECH_API_SECRET,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
+      headers: { 'API_KEY': PAYTECH_API_KEY, 'API_SECRET': PAYTECH_API_SECRET, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: amt, destination_number: cleanPhone, service,
+        callback_url: BACKEND_URL + '/api/transfer-callback', external_id: externalId
+      })
     });
-
     const rawText = await response.text();
     console.log('💸 Transfer PayTech:', response.status, rawText.slice(0, 400));
-
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch (e) {
-      return res.status(502).json({ error: 'Réponse non-JSON PayTech', raw: rawText.slice(0, 400) });
-    }
-
-    if (data.success === 1) {
-      const histRef = db.collection('users').doc(uid).collection('history').doc();
-      await db.runTransaction(async (t) => {
-        t.update(db.collection('users').doc(uid), {
-          balance: admin.firestore.FieldValue.increment(-amt)
-        });
-        t.set(histRef, {
-          type:        'withdraw',
-          label:       `Retrait ${service} — ${phone} — ${externalId}`,
-          amount:      -amt,
-          ref:         externalId,
-          transferId:  data.transfer?.id_transfer || '',
-          status:      'pending',
-          ts:          admin.firestore.FieldValue.serverTimestamp()
-        });
-      });
-
-      console.log(`✅ Retrait initié : ${uid} -${amt} FCFA → ${phone} (${service})`);
-      res.json({
-        message:    'Retrait en cours de traitement',
-        ref:        externalId,
-        transferId: data.transfer?.id_transfer || '',
-        status:     'pending'
-      });
-
-    } else {
-      console.error('❌ Échec transfer PayTech:', data);
-      res.status(400).json({ error: data.message || 'Échec PayTech', details: data });
-    }
-
+    try { data = JSON.parse(rawText); } catch (e) { data = null; }
   } catch (err) {
-    console.error('❌ Erreur retrait:', err);
-    res.status(500).json({ error: err.message });
+    console.error('❌ Erreur réseau PayTech:', err.message);
+    // Statut inconnu : on NE rembourse PAS automatiquement (le virement est peut-être parti).
+    await wdRef.update({ status: 'unknown', error: err.message }).catch(() => {});
+    return res.status(502).json({ error: 'PayTech injoignable — retrait en vérification', ref: externalId });
   }
+
+  if (data && data.success === 1) {
+    await wdRef.update({ status: 'sent', transferId: data.transfer?.id_transfer || '' });
+    return res.json({ message: 'Retrait en cours de traitement', ref: externalId, status: 'pending', success: true });
+  }
+
+  // 3) Refus clair de PayTech → remboursement
+  await refundWithdrawal(externalId, (data && data.message) || 'Refus PayTech');
+  return res.status(400).json({ error: (data && data.message) || 'Échec PayTech' });
 });
+
+// Rembourse un retrait une seule fois (idempotent)
+async function refundWithdrawal(externalId, reason) {
+  const wdRef = db.collection('withdrawals').doc(externalId);
+  await db.runTransaction(async (t) => {
+    const snap = await t.get(wdRef);
+    if (!snap.exists) return;
+    const w = snap.data();
+    if (['refunded', 'success'].includes(w.status)) return;
+    const userRef = db.collection('users').doc(w.ownerUid);
+    t.update(userRef, { balance: admin.firestore.FieldValue.increment(w.amount) });
+    t.set(userRef.collection('history').doc(externalId + '-R'), {
+      type: 'refund', label: 'Remboursement retrait échoué', amount: w.amount,
+      ref: externalId, ts: admin.firestore.FieldValue.serverTimestamp()
+    });
+    t.update(wdRef, { status: 'refunded', reason, refundedAt: admin.firestore.FieldValue.serverTimestamp() });
+  });
+}
+
+const safeEq = (a, b) => {
+  const x = Buffer.from(String(a || '')), y = Buffer.from(String(b || ''));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
 
 // ── CALLBACK TRANSFER PAYTECH ──
 app.post('/api/transfer-callback', async (req, res) => {
@@ -363,15 +392,17 @@ app.post('/api/transfer-callback', async (req, res) => {
     const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
     const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
 
-    if (api_key_sha256 !== expectedKeyHash || api_secret_sha256 !== expectedSecretHash) {
+    if (!safeEq(api_key_sha256, expectedKeyHash) || !safeEq(api_secret_sha256, expectedSecretHash)) {
       console.error('❌ Callback non authentifié');
       return res.status(403).send('Forbidden');
     }
 
     if (type_event === 'transfer_success') {
       console.log(`✅ Transfer confirmé : ${id_transfer} — ${amount} FCFA → ${destination_number}`);
+      if (external_id) await db.collection('withdrawals').doc(String(external_id)).update({ status: 'success' }).catch(() => {});
     } else if (type_event === 'transfer_failed') {
       console.error(`❌ Transfer échoué : ${id_transfer}`);
+      if (external_id) await refundWithdrawal(String(external_id), 'transfer_failed');
     }
 
     res.status(200).send('OK');
@@ -401,7 +432,7 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
     const expectedKeyHash    = crypto.createHash('sha256').update(PAYTECH_API_KEY).digest('hex');
     const expectedSecretHash = crypto.createHash('sha256').update(PAYTECH_API_SECRET).digest('hex');
 
-    if (api_key_sha256 !== expectedKeyHash || api_secret_sha256 !== expectedSecretHash) {
+    if (!safeEq(api_key_sha256, expectedKeyHash) || !safeEq(api_secret_sha256, expectedSecretHash)) {
       console.error('❌ IPN non authentifié — signature invalide');
       return res.status(403).send('Forbidden');
     }
@@ -473,11 +504,11 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
           status: 'pending'
         });
 
-        t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
+        // Payé par Mobile Money : on ne débite PAS le portefeuille du passager.
         t.set(histRef, {
           type: 'ticket',
-          label: `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to}`,
-          amount: -amount, ref: ref_command,
+          label: `Ticket ${meta.gie}/${meta.vehicle} → ${meta.to} (Mobile Money)`,
+          amount: 0, paidExternal: amount, ref: ref_command,
           ts: admin.firestore.FieldValue.serverTimestamp()
         });
 
@@ -507,17 +538,6 @@ app.post('/api/ipn', ipnLimiter, async (req, res) => {
         });
 
         console.log(`✅ Ticket : ${uid} -${amount} FCFA | receveur +${receiverAmt} | TataPay +${commission}`);
-      }
-
-      else if (type === 'retrait') {
-        t.update(userRef, { balance: admin.firestore.FieldValue.increment(-amount) });
-        t.set(histRef, {
-          type: 'withdraw',
-          label: `Retrait via ${finalMethod} — ${ref_command}`,
-          amount: -amount, ref: ref_command,
-          ts: admin.firestore.FieldValue.serverTimestamp()
-        });
-        console.log(`✅ Retrait : ${uid} -${amount} FCFA`);
       }
 
       t.update(txRef, {
@@ -596,7 +616,8 @@ app.post('/api/offline/sync', verifyToken, requireOfflineSecret, limiter, async 
   const results = [];
 
   for (const tx of transactions) {
-    const { payload, signature, price, receiverUid, syncRef } = tx;
+    const { payload, signature, price, syncRef } = tx;
+    const receiverUid = req.uid; // jamais pris du client
 
     try {
       const expectedSig = crypto
@@ -614,7 +635,7 @@ app.post('/api/offline/sync', verifyToken, requireOfflineSecret, limiter, async 
         continue;
       }
 
-      if (!price || price > 1000) {
+      if (!syncRef || typeof syncRef !== 'string' || !Number.isInteger(price) || price <= 0 || price > 1000) {
         results.push({ syncRef, status: 'rejected', reason: 'Dépasse limite 1000 FCFA par transaction' });
         continue;
       }
@@ -637,10 +658,15 @@ app.post('/api/offline/sync', verifyToken, requireOfflineSecret, limiter, async 
       let rejection = null;
 
       await db.runTransaction(async (t) => {
-        const [passengerSnap, sessionSnap] = await Promise.all([
+        const [passengerSnap, sessionSnap, receiverSnap] = await Promise.all([
           t.get(passengerRef),
-          t.get(sessionRef)
+          t.get(sessionRef),
+          t.get(receiverRef)
         ]);
+        if (!receiverSnap.exists || receiverSnap.data().role !== 'receiver' || payload.uid === receiverUid) {
+          rejection = 'Seul un receveur peut encaisser';
+          return;
+        }
 
         if (!passengerSnap.exists || (passengerSnap.data().balance || 0) < price) {
           rejection = 'Solde insuffisant';
