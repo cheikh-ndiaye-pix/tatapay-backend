@@ -280,7 +280,7 @@ app.post('/api/withdraw', verifyToken, limiter, requirePaytechKeys, async (req, 
   if (!WITHDRAWALS_ENABLED) {
     return res.status(503).json({ error: 'Retraits temporairement désactivés' });
   }
-  const { amount, phone, method, requestId } = req.body;
+  const { amount, phone, method } = req.body;
   const uid = req.uid;
 
   const amt = validateAmount(amount);
@@ -290,11 +290,7 @@ app.post('/api/withdraw', verifyToken, limiter, requirePaytechKeys, async (req, 
   if (!SERVICE_MAP[method]) return res.status(400).json({ error: 'Opérateur invalide' });
 
   const service    = SERVICE_MAP[method];
-  // Idempotence : un même requestId (réessai du client) donne le même externalId → jamais de double débit
-  const rid        = String(requestId || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 40);
-  const externalId = rid
-    ? 'TTW-' + uid.slice(0, 8) + '-' + rid
-    : 'TTW-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+  const externalId = 'TTW-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
   const userRef    = db.collection('users').doc(uid);
   const wdRef      = db.collection('withdrawals').doc(externalId);
   const histRef    = userRef.collection('history').doc(externalId);
@@ -303,8 +299,6 @@ app.post('/api/withdraw', verifyToken, limiter, requirePaytechKeys, async (req, 
   try {
     await db.runTransaction(async (t) => {
       const snap = await t.get(userRef);
-      const dup  = await t.get(wdRef);
-      if (dup.exists) throw Object.assign(new Error('Demande déjà traitée'), { http: 409, ref: externalId });
       if (!snap.exists) throw Object.assign(new Error('Utilisateur introuvable'), { http: 404 });
       const u = snap.data();
       if (!['approved', 'active'].includes(u.status)) throw Object.assign(new Error('Compte non validé'), { http: 403 });
@@ -321,7 +315,7 @@ app.post('/api/withdraw', verifyToken, limiter, requirePaytechKeys, async (req, 
       });
     });
   } catch (e) {
-    return res.status(e.http || 500).json({ error: e.message, ...(e.ref ? { ref: e.ref } : {}) });
+    return res.status(e.http || 500).json({ error: e.message });
   }
 
   // 2) Virement PayTech
