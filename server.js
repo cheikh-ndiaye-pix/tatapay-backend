@@ -1137,10 +1137,45 @@ app.post('/api/assistant', assistantLimiter, requireGeminiKey, async (req, res) 
 });
 
 // ════════════════════════════════════════════════════════════
-// ── SENTINEL : explication d'une alerte en langage simple (Gemini) ──
+// ── GROQ (IA gratuite, modèle Llama 3.3) ──
+// Nécessite la variable d'environnement GROQ_API_KEY sur Vercel.
+// ════════════════════════════════════════════════════════════
+const GROQ_API_KEY = clean(process.env.GROQ_API_KEY);
+
+const requireGroqKey = (req, res, next) => {
+  if (!GROQ_API_KEY) {
+    return res.status(503).json({ error: 'IA indisponible (GROQ_API_KEY manquante)' });
+  }
+  next();
+};
+
+async function askGroq(system, user) {
+  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + GROQ_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      temperature: 0.4,
+      max_tokens: 300
+    })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((data.error && data.error.message) || ('Groq HTTP ' + r.status));
+  return ((data.choices && data.choices[0] && data.choices[0].message.content) || '').trim();
+}
+
+// ════════════════════════════════════════════════════════════
+// ── SENTINEL : explication d'une alerte en langage simple (Groq) ──
 // Les chiffres viennent de Sentinel (envoyés par l'application) ; le modèle ne fait que les expliquer.
 // ════════════════════════════════════════════════════════════
-app.post('/api/ai-explain', verifyToken, assistantLimiter, requireGeminiKey, async (req, res) => {
+app.post('/api/ai-explain', verifyToken, assistantLimiter, requireGroqKey, async (req, res) => {
   const { type, bus, day, msg, lang } = req.body || {};
   const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
   const alertMsg = str(msg, 400);
@@ -1170,16 +1205,11 @@ app.post('/api/ai-explain', verifyToken, assistantLimiter, requireGeminiKey, asy
     `Détail : ${alertMsg}`;
 
   try {
-    const response = await genAI.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: { systemInstruction: systemPrompt }
-    });
-    const answer = (response.text || '').trim();
+    const answer = await askGroq(systemPrompt, prompt);
     if (!answer) return res.status(502).json({ error: 'Réponse vide' });
     res.json({ answer, lang: lang === 'wo' ? 'wo' : 'fr' });
   } catch (err) {
-    console.error('❌ Erreur ai-explain Gemini:', err);
+    console.error('❌ Erreur ai-explain Groq:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
